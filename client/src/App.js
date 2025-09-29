@@ -1,404 +1,396 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 
-const VIEWS = {
+const AUTH_MODE = {
   LOGIN: 'login',
   REGISTER: 'register',
-  CATALOG: 'catalog',
-  PRODUCT: 'product',
-  ARCHITECTURE: 'architecture',
 };
 
-const PRODUCTS = [
-  {
-    id: 'shirt',
-    name: 'Shirt',
-    price: 10,
-    image: '/assets/shirt.svg',
-    description:
-      'เสื้อยืดคอกลมสีแดง เนื้อผ้าระบายอากาศได้ดี นุ่มสบาย และเหมาะกับการแต่งตัวทุกโอกาส',
-    sizes: ['S', 'M', 'L', 'XL'],
-  },
-  {
-    id: 'box',
-    name: 'Box',
-    price: 1,
-    image: '/assets/box.svg',
-    description:
-      'กล่องไปรษณีย์เนื้อหนา ปลอดภัยสำหรับการจัดส่งสินค้าออนไลน์และใช้ซ้ำได้หลายครั้ง',
-    sizes: ['S', 'M', 'L'],
-  },
-  {
-    id: 'toys',
-    name: 'Toys',
-    price: 7,
-    image: '/assets/toys.svg',
-    description:
-      'ชุดของเล่นรวมสัตว์และบล็อกสร้างสรรค์ เสริมจินตนาการสำหรับเด็กและผู้ใหญ่',
-    sizes: ['Mini', 'Classic'],
-  },
-  {
-    id: 'mama',
-    name: 'Mama',
-    price: 3,
-    image: '/assets/snack.svg',
-    description:
-      'บะหมี่กึ่งสำเร็จรูปยอดนิยม รสชาติกลมกล่อมพร้อมซุปเข้มข้นรสเผ็ดกำลังดี',
-    sizes: ['แพ็คเดี่ยว', 'แพ็ค 6'],
-  },
-  {
-    id: 'book',
-    name: 'Book',
-    price: 12,
-    image: '/assets/book.svg',
-    description:
-      'หนังสือคู่มือเทคโนโลยีฉบับล่าสุด รวมเคล็ดลับและตัวอย่างที่อ่านง่ายเหมาะกับทุกระดับ',
-    sizes: ['ปกอ่อน', 'ปกแข็ง'],
-  },
-  {
-    id: 'chocolate',
-    name: 'Chocolate',
-    price: 5,
-    image: '/assets/chocolate.svg',
-    description:
-      'ช็อกโกแลตนมสูตรพรีเมียมรสละมุน ผลิตจากเมล็ดโกโก้คุณภาพดี พร้อมแพ็กเกจสีสันสดใส',
-    sizes: ['1 แท่ง', 'กล่องใหญ่'],
-  },
-];
+const DEFAULT_VARIANTS = ['S', 'M', 'L'];
+const DEFAULT_AMOUNTS = [1, 2, 3, 4, 5];
 
 function App() {
-  const [view, setView] = useState(VIEWS.LOGIN);
-  const [selectedProduct, setSelectedProduct] = useState(PRODUCTS[0]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showCartHint, setShowCartHint] = useState(false);
+  const [authMode, setAuthMode] = useState(AUTH_MODE.LOGIN);
+  const [formValues, setFormValues] = useState({ username: '', password: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [user, setUser] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [searchText, setSearchText] = useState('');
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [productError, setProductError] = useState(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [detailState, setDetailState] = useState({ size: 'S', amount: 1, isDescriptionOpen: true });
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+
+  const isRegister = authMode === AUTH_MODE.REGISTER;
+  const actionLabel = isRegister ? 'Register' : 'Login';
+  const toggleLabel = isRegister
+    ? 'Click here to login.'
+    : "Don't have ID ? Click here to register";
+
+  const handleToggleMode = () => {
+    setAuthMode((current) =>
+      current === AUTH_MODE.LOGIN ? AUTH_MODE.REGISTER : AUTH_MODE.LOGIN
+    );
+    setFormValues({ username: '', password: '' });
+    setFeedback(null);
+  };
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setFormValues((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    if (!formValues.username || !formValues.password) {
+      setFeedback({ type: 'error', message: 'Please fill in both fields.' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFeedback(null);
+
+    try {
+      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: formValues.username.trim(),
+          password: formValues.password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Request failed');
+      }
+
+      if (isRegister) {
+        setFeedback({ type: 'success', message: data?.message || 'Registration succeeded.' });
+        setAuthMode(AUTH_MODE.LOGIN);
+        setFormValues({ username: formValues.username.trim(), password: '' });
+      } else {
+        setUser(data?.user || { username: formValues.username.trim() });
+        setFeedback(null);
+        setFormValues({ username: '', password: '' });
+      }
+    } catch (error) {
+      setFeedback({ type: 'error', message: error.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setProducts([]);
+    setProductError(null);
+    setSearchText('');
+    setSelectedProduct(null);
+    setDetailError(null);
+    setDetailState({ size: 'S', amount: 1, isDescriptionOpen: true });
+    setAuthMode(AUTH_MODE.LOGIN);
+  };
+
+  const openProductDetail = (productId) => {
+    setSelectedProduct(null);
+    setDetailError(null);
+    setDetailState({ size: 'S', amount: 1, isDescriptionOpen: true });
+    setIsLoadingDetail(true);
+
+    fetch(`/api/products/${productId}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload?.message || 'Failed to load product detail');
+        }
+        return response.json();
+      })
+      .then((product) => {
+        setSelectedProduct(product);
+      })
+      .catch((error) => {
+        setDetailError(error.message);
+      })
+      .finally(() => {
+        setIsLoadingDetail(false);
+      });
+  };
+
+  const closeProductDetail = () => {
+    setSelectedProduct(null);
+    setDetailError(null);
+    setIsLoadingDetail(false);
+  };
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingProducts(true);
+    setProductError(null);
+
+    fetch('/api/products')
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload?.message || 'Failed to load products');
+        }
+        return response.json();
+      })
+      .then((items) => {
+        if (isMounted) {
+          setProducts(Array.isArray(items) ? items : []);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setProductError(error.message);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingProducts(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   const filteredProducts = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    if (!term) {
-      return PRODUCTS;
+    if (!searchText) {
+      return products;
     }
-    return PRODUCTS.filter((product) =>
-      product.name.toLowerCase().includes(term)
+    const keyword = searchText.trim().toLowerCase();
+    return products.filter((product) =>
+      product.name?.toLowerCase().includes(keyword) ||
+      product.description?.toLowerCase().includes(keyword)
     );
-  }, [searchTerm]);
+  }, [products, searchText]);
 
-  const showHeader = view !== VIEWS.LOGIN && view !== VIEWS.REGISTER;
-
-  const goToView = (nextView) => {
-    if (nextView === VIEWS.LOGIN) {
-      setSearchTerm('');
-    }
-    setView(nextView);
+  const handleDetailSelectChange = (event) => {
+    const { name, value } = event.target;
+    setDetailState((prev) => ({ ...prev, [name]: name === 'amount' ? Number(value) : value }));
   };
 
-  const handleLoginSuccess = () => {
-    setView(VIEWS.CATALOG);
+  const toggleDescription = () => {
+    setDetailState((prev) => ({ ...prev, isDescriptionOpen: !prev.isDescriptionOpen }));
   };
 
-  const handleRegister = () => {
-    setView(VIEWS.CATALOG);
-  };
-
-  const handleSelectProduct = (product) => {
-    setSelectedProduct(product);
-    setView(VIEWS.PRODUCT);
-  };
-
-  const handleCartClick = () => {
-    setShowCartHint(true);
-    setView(VIEWS.CATALOG);
-  };
+  if (!user) {
+    return (
+      <main className="login-page">
+        <span className="background-ring background-ring--left" aria-hidden="true"></span>
+        <span className="background-ring background-ring--right" aria-hidden="true"></span>
+        <section className="login-card">
+          <h1 className="brand-title">Quick Shop</h1>
+          <form className="login-form" onSubmit={handleSubmit}>
+            <label className="field">
+              <span className="field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                  <path fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+                  <path fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" d="M4 20.5c0-3.59 3.134-6.5 8-6.5s8 2.91 8 6.5" />
+                </svg>
+              </span>
+              <input
+                type="text"
+                name="username"
+                placeholder="Username"
+                autoComplete="username"
+                value={formValues.username}
+                onChange={handleChange}
+                disabled={isSubmitting}
+              />
+            </label>
+            <label className="field">
+              <span className="field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                  <path fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" d="M16 11V7a4 4 0 0 0-8 0v4" />
+                  <rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" d="M12 15v4" />
+                </svg>
+              </span>
+              <input
+                type="password"
+                name="password"
+                placeholder="Password"
+                autoComplete={isRegister ? 'new-password' : 'current-password'}
+                value={formValues.password}
+                onChange={handleChange}
+                disabled={isSubmitting}
+              />
+            </label>
+            <button type="submit" className="login-button" disabled={isSubmitting}>
+              {isSubmitting ? `${actionLabel}...` : actionLabel}
+            </button>
+          </form>
+          {feedback ? (
+            <p className={`form-feedback ${feedback.type}`}>{feedback.message}</p>
+          ) : null}
+          <p className="form-switch">
+            <button type="button" onClick={handleToggleMode} disabled={isSubmitting}>
+              {toggleLabel}
+            </button>
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <div className="app-wrapper">
-      {showHeader && (
-        <MainHeader
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-          onNavigateHome={() => goToView(VIEWS.CATALOG)}
-          onNavigateArchitecture={() => goToView(VIEWS.ARCHITECTURE)}
-          onCartClick={handleCartClick}
-          onLogout={() => goToView(VIEWS.LOGIN)}
-        />
-      )}
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="brand">
+          <span className="brand-logo">Quick Shop</span>
+          <button className="menu-button" type="button" aria-label="Toggle menu">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <form className="search-bar" onSubmit={(event) => event.preventDefault()}>
+            <input
+              type="search"
+              placeholder="Hinted search text"
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+            />
+            <button type="submit" aria-label="Search">
+              <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                <line x1="20" y1="20" x2="16.65" y2="16.65" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
+          </form>
+        </div>
+        <nav className="main-nav">
+          <a href="#home">Home</a>
+          <a href="#cart">Cart</a>
+          <a href="#about">About</a>
+          <button type="button" onClick={handleLogout}>
+            Logout
+          </button>
+        </nav>
+      </header>
 
-      <main>
-        {view === VIEWS.LOGIN && (
-          <AuthPage
-            variant="login"
-            onSubmit={handleLoginSuccess}
-            onSwitch={() => goToView(VIEWS.REGISTER)}
-          />
-        )}
-
-        {view === VIEWS.REGISTER && (
-          <AuthPage
-            variant="register"
-            onSubmit={handleRegister}
-            onSwitch={() => goToView(VIEWS.LOGIN)}
-          />
-        )}
-
-        {view === VIEWS.CATALOG && (
-          <Catalog
-            products={filteredProducts}
-            onSelect={handleSelectProduct}
-            showCartHint={showCartHint}
-            onDismissCartHint={() => setShowCartHint(false)}
-          />
-        )}
-
-        {view === VIEWS.PRODUCT && (
-          <ProductDetail
-            product={selectedProduct}
-            onBack={() => goToView(VIEWS.CATALOG)}
-          />
-        )}
-
-        {view === VIEWS.ARCHITECTURE && (
-          <ArchitecturePlan
-            onBackToShop={() => goToView(VIEWS.CATALOG)}
-          />
+      <main className="product-layout">
+        {isLoadingProducts ? (
+          <p className="product-status">Loading products...</p>
+        ) : productError ? (
+          <p className="product-status error">{productError}</p>
+        ) : filteredProducts.length === 0 ? (
+          <p className="product-status">No products match the current search.</p>
+        ) : (
+          <section className="product-grid">
+            {filteredProducts.map((product) => (
+              <article
+                key={product.id}
+                className="product-card"
+                onClick={() => openProductDetail(product.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openProductDetail(product.id);
+                  }
+                }}
+              >
+                <figure>
+                  <img src={product.imageUrl} alt={product.name} loading="lazy" />
+                </figure>
+                <div className="product-info">
+                  <h3>{product.name}</h3>
+                  <p className="product-price">${product.price}</p>
+                  {product.description ? (
+                    <p className="product-description">{product.description}</p>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </section>
         )}
       </main>
-    </div>
-  );
-}
 
-function MainHeader({
-  searchTerm,
-  onSearchChange,
-  onNavigateHome,
-  onNavigateArchitecture,
-  onCartClick,
-  onLogout,
-}) {
-  return (
-    <header className="main-header">
-      <span className="brand">Quick Shop</span>
-      <div className="search">
-        <input
-          type="search"
-          value={searchTerm}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="Hinted search text"
-          aria-label="Search products"
-        />
-      </div>
-      <nav>
-        <button type="button" onClick={onNavigateHome}>
-          Home
-        </button>
-        <button type="button" onClick={onCartClick}>
-          Cart
-        </button>
-        <button type="button" onClick={onNavigateArchitecture}>
-          About
-        </button>
-        <button type="button" onClick={onLogout}>
-          Logout
-        </button>
-      </nav>
-    </header>
-  );
-}
-
-function AuthPage({ variant, onSubmit, onSwitch }) {
-  const isLogin = variant === 'login';
-  const buttonLabel = isLogin ? 'Login' : 'Register';
-  const message = isLogin
-    ? "Don't have ID?"
-    : 'Already have an account?';
-  const switchLabel = isLogin
-    ? 'Click here to register'
-    : 'Click here to login';
-
-  return (
-    <section className="auth-page">
-      <div className="auth-card">
-        <h1>Quick Shop</h1>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit();
-          }}
-        >
-          <input type="text" placeholder="Username" required />
-          <input type="password" placeholder="Password" required />
-          <button className="primary-button" type="submit">
-            {buttonLabel}
-          </button>
-        </form>
-        <p className="auth-switch">
-          {message}
-          <button type="button" onClick={onSwitch}>
-            {switchLabel}
-          </button>
-        </p>
-      </div>
-    </section>
-  );
-}
-
-function Catalog({ products, onSelect, showCartHint, onDismissCartHint }) {
-  return (
-    <section className="catalog-page">
-      <div>
-        <h2>Fresh arrivals</h2>
-        <p>
-          เลือกสินค้าใหม่ล่าสุดที่ทีม QUICK SHOP เลือกสรรมาให้คุณ และคลิกเพื่อดูรายละเอียดสินค้าแบบเต็ม
-        </p>
-      </div>
-
-      {showCartHint && (
-        <div className="cart-hint" role="status">
-          <span>ตะกร้าของคุณยังว่างอยู่ — เลือกสินค้าเพื่อเริ่มช้อปได้เลย!</span>
-          <button type="button" onClick={onDismissCartHint}>
-            ปิด
-          </button>
-        </div>
-      )}
-
-      {products.length === 0 ? (
-        <div className="catalog-empty">
-          ไม่พบสินค้าที่ตรงกับคำค้นหา ลองใช้คำค้นหาอื่นหรือดูหมวดหมู่ทั้งหมด
-        </div>
-      ) : (
-        <div className="catalog-grid">
-          {products.map((product) => (
-            <button
-              type="button"
-              key={product.id}
-              className="product-card"
-              onClick={() => onSelect(product)}
-            >
-              <img src={product.image} alt={product.name} />
-              <div className="product-body">
-                <span className="product-name">{product.name}</span>
-                <span className="product-price">${product.price}</span>
-              </div>
+      {selectedProduct || isLoadingDetail || detailError ? (
+        <div className="product-detail-overlay" role="dialog" aria-modal="true">
+          <div className="product-detail">
+            <button className="detail-close" type="button" onClick={closeProductDetail}>
+              ×
             </button>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
+            {isLoadingDetail ? (
+              <p className="detail-status">Loading product...</p>
+            ) : detailError ? (
+              <p className="detail-status error">{detailError}</p>
+            ) : selectedProduct ? (
+              <div className="detail-content">
+                <div className="detail-image">
+                  <img src={selectedProduct.imageUrl} alt={selectedProduct.name} />
+                </div>
+                <div className="detail-info">
+                  <h2>{selectedProduct.name}</h2>
+                  <p className="detail-price">${selectedProduct.price}</p>
 
-function ProductDetail({ product, onBack }) {
-  return (
-    <section className="product-detail">
-      <div className="detail-media">
-        <img src={product.image} alt={product.name} />
-      </div>
-      <div className="detail-info">
-        <h2>{product.name}</h2>
-        <p className="detail-price">${product.price}</p>
-        <div className="detail-grid">
-          <div className="form-row">
-            <label htmlFor="size-select">Size</label>
-            <select id="size-select" defaultValue={product.sizes[0]}>
-              {product.sizes.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="form-row">
-            <label htmlFor="amount-select">Amount</label>
-            <select id="amount-select" defaultValue="1">
-              {[1, 2, 3, 4, 5].map((amount) => (
-                <option key={amount} value={amount}>
-                  {amount}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <button type="button" className="buy-button">
-          Buy
-        </button>
-        <details className="detail-description">
-          <summary>Detail</summary>
-          <p>{product.description}</p>
-        </details>
-        <button type="button" className="back-link" onClick={onBack}>
-          ← Back to catalog
-        </button>
-      </div>
-    </section>
-  );
-}
+                  <div className="detail-controls">
+                    <label>
+                      <span>Size</span>
+                      <select
+                        name="size"
+                        value={detailState.size}
+                        onChange={handleDetailSelectChange}
+                      >
+                        {DEFAULT_VARIANTS.map((variant) => (
+                          <option key={variant} value={variant}>
+                            {variant}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Amount</span>
+                      <select
+                        name="amount"
+                        value={detailState.amount}
+                        onChange={handleDetailSelectChange}
+                      >
+                        {DEFAULT_AMOUNTS.map((amount) => (
+                          <option key={amount} value={amount}>
+                            {amount}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
 
-function ArchitecturePlan({ onBackToShop }) {
-  return (
-    <section className="architecture-page">
-      <h1>Cloud architecture plan</h1>
-      <div className="architecture-diagram">
-        <div className="arch-group">
-          <h3>Client experience</h3>
-          <ul className="arch-list">
-            <li>Browser / Search / Product listing</li>
-            <li>Mobile app and push notification</li>
-            <li>Onboarding, profile และระบบแนะนำสินค้า</li>
-          </ul>
+                  <button type="button" className="detail-buy">
+                    Buy
+                  </button>
+
+                  <div className="detail-description">
+                    <button type="button" onClick={toggleDescription}>
+                      Detail
+                      <span aria-hidden="true">{detailState.isDescriptionOpen ? '▾' : '▸'}</span>
+                    </button>
+                    {detailState.isDescriptionOpen && selectedProduct.description ? (
+                      <p>{selectedProduct.description}</p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
-        <div className="arch-group">
-          <h3>Edge &amp; networking</h3>
-          <ul className="arch-list">
-            <li>CloudFront CDN สำหรับ static asset</li>
-            <li>Route53 จัดการ DNS และ SSL</li>
-            <li>ELB กระจายโหลดไปยังบริการหลัก</li>
-          </ul>
-        </div>
-        <div className="arch-group">
-          <h3>Application tier</h3>
-          <ul className="arch-list">
-            <li>Node.js / Express API</li>
-            <li>Microservices แยกตามโดเมนสินค้า</li>
-            <li>Worker สำหรับจัดการออเดอร์และสต็อก</li>
-          </ul>
-        </div>
-        <div className="arch-group">
-          <h3>Security</h3>
-          <ul className="arch-list">
-            <li>IAM ควบคุมสิทธิ์การเข้าถึง</li>
-            <li>Security Group และ Firewall</li>
-            <li>WAF ป้องกันการโจมตีที่ขอบระบบ</li>
-          </ul>
-        </div>
-        <div className="arch-group">
-          <h3>Data &amp; persistence</h3>
-          <ul className="arch-list">
-            <li>Amazon RDS (PostgreSQL)</li>
-            <li>Amazon S3 สำหรับ media และ asset</li>
-            <li>Redis cache สำหรับ session</li>
-          </ul>
-        </div>
-        <div className="arch-group">
-          <h3>Observability</h3>
-          <ul className="arch-list">
-            <li>CloudWatch metrics &amp; dashboard</li>
-            <li>CloudTrail บันทึก audit log</li>
-            <li>Alarm สำหรับ SLA สำคัญ</li>
-          </ul>
-        </div>
-      </div>
-      <div className="arch-annotation">
-        <h4>Flow highlights</h4>
-        <ol>
-          <li>ผู้ใช้เชื่อมต่อผ่าน CloudFront เพื่อรับ UI แบบ static จาก React</li>
-          <li>คำสั่งซื้อวิ่งผ่าน ELB ไปยังเซิร์ฟเวอร์ Node.js บน EC2 ที่เชื่อมต่อ RDS</li>
-          <li>IAM และ Security Group ตรวจสอบสิทธิ์ก่อนเข้าถึงฐานข้อมูล</li>
-          <li>ระบบส่งต่อเหตุการณ์ไปยังบริการเสริม เช่น งานเบื้องหลังและการแจ้งเตือน</li>
-          <li>CloudWatch / CloudTrail ติดตาม metric และบันทึกทุกกิจกรรมเพื่อการวิเคราะห์</li>
-        </ol>
-      </div>
-      <button type="button" className="back-link" onClick={onBackToShop}>
-        ← กลับไปหน้าร้านค้า
-      </button>
-    </section>
+      ) : null}
+    </div>
   );
 }
 
