@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 240">
+  <defs>
+    <linearGradient id="gradBook" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4776e6" />
+      <stop offset="100%" stop-color="#8e54e9" />
+    </linearGradient>
+  </defs>
+  <rect width="360" height="240" fill="url(#gradBook)" rx="28" />
+  <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="140">📘</text>
+</svg>
