@@ -56,7 +56,7 @@ async function createUsersTable() {
       username TEXT NOT NULL UNIQUE,
       email TEXT UNIQUE,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'customer',
+      role TEXT NOT NULL DEFAULT 'client',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `;
@@ -73,6 +73,7 @@ async function createProductsTable() {
       price REAL NOT NULL DEFAULT 0,
       image_url TEXT,
       description TEXT,
+      has_size INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE SET NULL
     )
@@ -95,6 +96,7 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=600&q=80',
       description: 'Soft cotton t-shirt available in multiple colors.',
+      hasSize: true,
     },
     {
       name: 'Cardboard Box',
@@ -102,6 +104,7 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1514996937319-344454492b37?auto=format&fit=crop&w=600&q=80',
       description: 'Sturdy medium size box for shipping or storage.',
+      hasSize: false,
     },
     {
       name: 'Toy Bundle',
@@ -109,6 +112,7 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1601758003122-58c0fef13782?auto=format&fit=crop&w=600&q=80',
       description: 'Assorted toys for kids, perfect for parties.',
+      hasSize: false,
     },
     {
       name: 'Instant Noodles Pack',
@@ -116,6 +120,7 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1512058454905-109598bd0cad?auto=format&fit=crop&w=600&q=80',
       description: 'Quick meal ready in minutes with authentic flavor.',
+      hasSize: false,
     },
     {
       name: 'Cooking Manual',
@@ -123,6 +128,7 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1513475382585-d06e58bcb0e0?auto=format&fit=crop&w=600&q=80',
       description: 'Comprehensive cooking guide for beginners.',
+      hasSize: false,
     },
     {
       name: 'Chocolate Cereal',
@@ -130,13 +136,14 @@ async function seedProductsIfEmpty() {
       image:
         'https://images.unsplash.com/photo-1613478881183-b3a7c633c8e1?auto=format&fit=crop&w=600&q=80',
       description: 'Crunchy breakfast cereal with chocolate flavor.',
+      hasSize: false,
     },
   ];
 
-  const insertSql = 'INSERT INTO products (seller_id, name, price, image_url, description) VALUES (?, ?, ?, ?, ?)';
+  const insertSql = 'INSERT INTO products (seller_id, name, price, image_url, description, has_size) VALUES (?, ?, ?, ?, ?, ?)';
 
   for (const product of seedData) {
-    await run(insertSql, [null, product.name, product.price, product.image, product.description]);
+    await run(insertSql, [null, product.name, product.price, product.image, product.description, product.hasSize ? 1 : 0]);
   }
 }
 
@@ -155,7 +162,12 @@ async function migrateLegacyUsersTableIfNeeded(columns) {
 
   await run(
     `INSERT INTO users (id, username, email, password_hash, role, created_at)
-     SELECT user_id, username, email, password_hash, COALESCE(role, 'customer'), COALESCE(created_at, CURRENT_TIMESTAMP)
+     SELECT user_id, username, email, password_hash, 
+       CASE WHEN role IS NULL OR TRIM(role) = '' THEN 'client'
+            WHEN LOWER(role) = 'customer' THEN 'client'
+            ELSE LOWER(role)
+       END,
+       COALESCE(created_at, CURRENT_TIMESTAMP)
      FROM ${backupTable}`
   );
 
@@ -167,8 +179,9 @@ async function migrateLegacyProductsTableIfNeeded(columns) {
   const hasLegacyProductId = columns.some((column) => column.name === 'product_id');
   const sellerColumn = columns.find((column) => column.name === 'seller_id');
   const sellerNotNullable = sellerColumn && sellerColumn.notnull !== 0;
+  const hasHasSize = columns.some((column) => column.name === 'has_size');
 
-  if (hasModernId && !hasLegacyProductId && !sellerNotNullable) {
+  if (hasModernId && !hasLegacyProductId && !sellerNotNullable && hasHasSize) {
     return;
   }
 
@@ -183,35 +196,33 @@ async function migrateLegacyProductsTableIfNeeded(columns) {
   const selectIdPart = legacyNames.includes('id')
     ? 'id'
     : legacyNames.includes('product_id')
-      ? 'product_id AS id'
-      : 'NULL AS id';
-
-  const selectSellerPart = legacyNames.includes('seller_id') ? 'seller_id' : 'NULL AS seller_id';
-  const selectNamePart = legacyNames.includes('name') ? 'name' : "'' AS name";
-  const selectPricePart = legacyNames.includes('price') ? 'price' : '0 AS price';
-  const selectImagePart = legacyNames.includes('image_url') ? 'image_url' : 'NULL AS image_url';
-  const selectDescriptionPart = legacyNames.includes('description') ? 'description' : 'NULL AS description';
-  const selectCreatedAtPart = legacyNames.includes('created_at')
-    ? 'created_at'
-    : 'CURRENT_TIMESTAMP AS created_at';
+      ? 'product_id'
+      : 'NULL';
 
   const selectParts = [
-    selectIdPart,
-    selectSellerPart,
-    selectNamePart,
-    selectPricePart,
-    selectImagePart,
-    selectDescriptionPart,
-    selectCreatedAtPart,
+    `${selectIdPart} AS id`,
+    legacyNames.includes('seller_id') ? 'seller_id' : 'NULL AS seller_id',
+    legacyNames.includes('name') ? 'name' : "'' AS name",
+    legacyNames.includes('price') ? 'price' : '0 AS price',
+    legacyNames.includes('image_url') ? 'image_url' : 'NULL AS image_url',
+    legacyNames.includes('description') ? 'description' : 'NULL AS description',
+    legacyNames.includes('has_size') ? 'has_size' : '1 AS has_size',
+    legacyNames.includes('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP AS created_at',
   ];
 
   await run(
-    `INSERT INTO products (id, seller_id, name, price, image_url, description, created_at)
+    `INSERT INTO products (id, seller_id, name, price, image_url, description, has_size, created_at)
      SELECT ${selectParts.join(', ')}
      FROM ${backupTable}`
   );
 
   await run(`DROP TABLE ${backupTable}`);
+}
+
+async function normaliseUserRoles() {
+  await run("UPDATE users SET role = 'client' WHERE role IS NULL OR TRIM(role) = '' OR LOWER(role) = 'customer'");
+  await run("UPDATE users SET role = LOWER(role)");
+  await run("UPDATE users SET role = 'client' WHERE LOWER(role) NOT IN ('client','seller')");
 }
 
 async function initialize() {
@@ -224,6 +235,7 @@ async function initialize() {
   const productColumns = await all('PRAGMA table_info(products)');
   await migrateLegacyProductsTableIfNeeded(productColumns);
 
+  await normaliseUserRoles();
   await seedProductsIfEmpty();
 }
 
