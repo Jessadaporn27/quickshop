@@ -484,6 +484,7 @@ body {
 .seller-form-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.75rem;
 }
 
 .seller-form-actions button {
@@ -510,6 +511,24 @@ body {
 .seller-form-actions button:not(:disabled):hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 30px rgba(79, 113, 255, 0.48);
+}
+
+.seller-form-actions .secondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: inherit;
+  box-shadow: none;
+}
+
+.seller-form-actions .secondary:not(:disabled):hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.seller-form-actions .secondary:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .seller-feedback {

@@ -45,6 +45,7 @@ function App() {
   });
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [productFormFeedback, setProductFormFeedback] = useState(null);
+  const [isAddProductVisible, setIsAddProductVisible] = useState(false);
 
   const isRegister = authMode === AUTH_MODE.REGISTER;
   const actionLabel = isRegister ? 'Register' : 'Login';
@@ -52,6 +53,12 @@ function App() {
     ? 'Click here to login.'
     : "Don't have ID ? Click here to register";
   const isSeller = user?.role === 'seller';
+
+  useEffect(() => {
+    if (!isSeller && isAddProductVisible) {
+      setIsAddProductVisible(false);
+    }
+  }, [isSeller, isAddProductVisible]);
 
   const handleToggleMode = () => {
     setAuthMode((current) =>
@@ -151,6 +158,7 @@ function App() {
     });
     setIsCreatingProduct(false);
     setProductFormFeedback(null);
+    setIsAddProductVisible(false);
     setFormValues({ username: '', password: '', role: 'customer' });
     setAuthMode(AUTH_MODE.LOGIN);
   };
@@ -303,6 +311,12 @@ function App() {
 
   const toggleDescription = () => {
     setDetailState((prev) => ({ ...prev, isDescriptionOpen: !prev.isDescriptionOpen }));
+  };
+
+  const handleToggleAddProduct = () => {
+    closeProductDetail();
+    setProductFormFeedback(null);
+    setIsAddProductVisible((prev) => !prev);
   };
 
   const handleNewProductChange = (event) => {
@@ -511,6 +525,11 @@ function App() {
           <a href="#home">Home</a>
           <a href="#cart">Cart</a>
           <a href="#about">About</a>
+          {isSeller ? (
+            <button type="button" onClick={handleToggleAddProduct}>
+              {isAddProductVisible ? 'View products' : 'Add product'}
+            </button>
+          ) : null}
           <button type="button" onClick={handleLogout}>
             Logout
           </button>
@@ -518,7 +537,7 @@ function App() {
       </header>
 
       <main className="product-layout">
-        {isSeller ? (
+        {isSeller && isAddProductVisible ? (
           <section className="seller-panel">
             <h2>Add a product</h2>
             <form className="seller-form" onSubmit={handleCreateProduct}>
@@ -600,6 +619,14 @@ function App() {
                 />
               </label>
               <div className="seller-form-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={handleToggleAddProduct}
+                  disabled={isCreatingProduct}
+                >
+                  Back to products
+                </button>
                 <button type="submit" disabled={isCreatingProduct}>
                   {isCreatingProduct ? 'Adding...' : 'Add product'}
                 </button>
@@ -613,52 +640,54 @@ function App() {
           </section>
         ) : null}
 
-        {isLoadingProducts ? (
-          <p className="product-status">Loading products...</p>
-        ) : productError ? (
-          <p className="product-status error">{productError}</p>
-        ) : filteredProducts.length === 0 ? (
-          <p className="product-status">No products match the current search.</p>
-        ) : (
-          <section className="product-grid">
-            {filteredProducts.map((product) => {
-              const stockCount =
-                Number.isInteger(product.stock) && product.stock >= 0
-                  ? product.stock
-                  : Number.parseInt(product.stock ?? 0, 10) || 0;
-              const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+        {isAddProductVisible ? null : (
+          isLoadingProducts ? (
+            <p className="product-status">Loading products...</p>
+          ) : productError ? (
+            <p className="product-status error">{productError}</p>
+          ) : filteredProducts.length === 0 ? (
+            <p className="product-status">No products match the current search.</p>
+          ) : (
+            <section className="product-grid">
+              {filteredProducts.map((product) => {
+                const stockCount =
+                  Number.isInteger(product.stock) && product.stock >= 0
+                    ? product.stock
+                    : Number.parseInt(product.stock ?? 0, 10) || 0;
+                const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
 
-              return (
-                <article
-                  key={product.id}
-                  className="product-card"
-                  onClick={() => openProductDetail(product.id)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      openProductDetail(product.id);
-                    }
-                  }}
-                >
-                  <figure>
-                    <img src={imageSrc} alt={product.name} loading="lazy" />
-                  </figure>
-                  <div className="product-info">
-                    <h3>{product.name}</h3>
-                    <p className="product-price">${product.price}</p>
-                    <p className={`product-stock ${stockCount > 0 ? '' : 'out'}`}>
-                      {stockCount > 0 ? `In stock: ${stockCount}` : 'Out of stock'}
-                    </p>
-                    {product.description ? (
-                      <p className="product-description">{product.description}</p>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
+                return (
+                  <article
+                    key={product.id}
+                    className="product-card"
+                    onClick={() => openProductDetail(product.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openProductDetail(product.id);
+                      }
+                    }}
+                  >
+                    <figure>
+                      <img src={imageSrc} alt={product.name} loading="lazy" />
+                    </figure>
+                    <div className="product-info">
+                      <h3>{product.name}</h3>
+                      <p className="product-price">${product.price}</p>
+                      <p className={`product-stock ${stockCount > 0 ? '' : 'out'}`}>
+                        {stockCount > 0 ? `In stock: ${stockCount}` : 'Out of stock'}
+                      </p>
+                      {product.description ? (
+                        <p className="product-description">{product.description}</p>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+          )
         )}
       </main>
 
