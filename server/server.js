@@ -6,8 +6,7 @@ const { all, get, run, initialize, databaseFile } = require('./db');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const TABLE_NAME_REGEX = /^[A-Za-z0-9_]+$/;
-const ALLOWED_ROLES = new Set(['client', 'seller']);
-const DEFAULT_ROLE = 'client';
+const VALID_ROLES = ['customer', 'seller'];
 
 app.use(cors());
 app.use(express.json());
@@ -25,21 +24,77 @@ function normaliseEmail(value) {
 }
 
 function normaliseRole(value) {
-  if (!value) {
-    return DEFAULT_ROLE;
+  if (!value || typeof value !== 'string') {
+    return null;
   }
 
-  const role = String(value).trim().toLowerCase();
-  return ALLOWED_ROLES.has(role) ? role : null;
+  const role = value.trim().toLowerCase();
+  return VALID_ROLES.includes(role) ? role : null;
 }
 
-function normaliseStoredRole(value) {
+function parseSizeOptions(value) {
   if (!value) {
-    return DEFAULT_ROLE;
+    return [];
   }
 
-  const role = String(value).trim().toLowerCase();
-  return ALLOWED_ROLES.has(role) ? role : DEFAULT_ROLE;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => {
+        if (typeof item === 'string' || typeof item === 'number') {
+          return String(item).trim();
+        }
+        return '';
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function serialiseSizeOptions(value) {
+  if (!value) {
+    return null;
+  }
+
+  const list = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+
+  const cleaned = [...new Set(list.map((item) => String(item).trim()).filter(Boolean))];
+
+  return cleaned.length > 0 ? JSON.stringify(cleaned) : null;
+}
+
+function mapProductRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  const sizeSource = row.sizeOptions ?? row.size_options ?? null;
+  const imageSource = row.imageUrl ?? row.image_url ?? null;
+  const sellerSource = row.sellerId ?? row.seller_id ?? null;
+  const priceValue =
+    typeof row.price === 'number' ? row.price : Number.parseFloat(row.price ?? 0) || 0;
+  const stockValue =
+    Number.isInteger(row.stock) ? row.stock : Number.parseInt(row.stock, 10) || 0;
+
+  return {
+    id: row.id,
+    sellerId: sellerSource,
+    name: row.name,
+    price: priceValue,
+    stock: stockValue,
+    sizeOptions: parseSizeOptions(sizeSource),
+    imageUrl: imageSource,
+    description: row.description ?? null,
+  };
 }
 
 app.post('/api/auth/register', async (req, res) => {
@@ -50,16 +105,16 @@ app.post('/api/auth/register', async (req, res) => {
     const normalisedEmail = normaliseEmail(email);
     const normalisedRole = normaliseRole(role);
 
+    if (role && !normalisedRole) {
+      return res.status(400).json({ message: 'Invalid role supplied.' });
+    }
+
     if (!normalisedUsername || normalisedUsername.length < 3) {
       return res.status(400).json({ message: 'Username must be at least 3 characters long.' });
     }
 
     if (!password || typeof password !== 'string' || password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
-    }
-
-    if (!normalisedRole) {
-      return res.status(400).json({ message: "Role must be either 'client' or 'seller'." });
     }
 
     if (normalisedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalisedEmail)) {
@@ -90,13 +145,12 @@ app.post('/api/auth/register', async (req, res) => {
 
     const result = await run(
       'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-      [normalisedUsername, normalisedEmail, passwordHash, normalisedRole]
+      [normalisedUsername, normalisedEmail, passwordHash, normalisedRole || 'customer']
     );
 
     res.status(201).json({
       message: 'Registration successful.',
       userId: result.lastID,
-      role: normalisedRole,
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -132,7 +186,7 @@ app.post('/api/auth/login', async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
-        role: normaliseStoredRole(user.role),
+        role: normaliseRole(user.role) || 'customer',
       },
     });
   } catch (error) {
@@ -141,74 +195,16 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/products', async (req, res) => {
-  try {
-    const { sellerId, name, price, imageUrl, description, hasSize } = req.body || {};
-
-    const numericSellerId = Number.parseInt(sellerId, 10);
-    const trimmedName = typeof name === 'string' ? name.trim() : '';
-    const numericPrice = Number.parseFloat(price);
-    const trimmedImageUrl = typeof imageUrl === 'string' ? imageUrl.trim() : '';
-    const trimmedDescription = typeof description === 'string' ? description.trim() : '';
-    const normalisedHasSize = (
-      typeof hasSize === 'boolean'
-        ? hasSize
-        : typeof hasSize === 'string'
-          ? ['true', '1', 'yes', 'on'].includes(hasSize.trim().toLowerCase())
-          : typeof hasSize === 'number'
-            ? hasSize != 0
-            : true
-    );
-
-    if (!Number.isInteger(numericSellerId) || numericSellerId <= 0) {
-      return res.status(400).json({ message: 'Valid sellerId is required.' });
-    }
-
-    if (!trimmedName) {
-      return res.status(400).json({ message: 'Product name is required.' });
-    }
-
-    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
-      return res.status(400).json({ message: 'Price must be a positive number.' });
-    }
-
-    const seller = await get('SELECT id, role FROM users WHERE id = ?', [numericSellerId]);
-
-    if (!seller) {
-      return res.status(404).json({ message: 'Seller not found.' });
-    }
-
-    if (normaliseStoredRole(seller.role) !== 'seller') {
-      return res.status(403).json({ message: 'Only sellers can add products.' });
-    }
-
-    const result = await run(
-      'INSERT INTO products (seller_id, name, price, image_url, description, has_size) VALUES (?, ?, ?, ?, ?, ?)',
-      [numericSellerId, trimmedName, numericPrice, trimmedImageUrl || null, trimmedDescription || null, normalisedHasSize ? 1 : 0]
-    );
-
-    const product = await get(
-      'SELECT id, name, price, image_url AS imageUrl, description, has_size AS hasSize FROM products WHERE id = ?',
-      [result.lastID]
-    );
-
-    res.status(201).json({
-      message: 'Product created successfully.',
-      product,
-    });
-  } catch (error) {
-    console.error('Create product error:', error);
-    res.status(500).json({ message: 'Failed to create product.' });
-  }
-});
-
 app.get('/api/products', async (req, res) => {
   try {
     const products = await all(
-      'SELECT id, name, price, image_url AS imageUrl, description, has_size AS hasSize FROM products ORDER BY created_at DESC'
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        ORDER BY created_at DESC`
     );
 
-    res.json(products);
+    res.json(products.map(mapProductRow));
   } catch (error) {
     console.error('Products fetch error:', error);
     res.status(500).json({ message: 'Failed to load products.' });
@@ -224,7 +220,10 @@ app.get('/api/products/:id', async (req, res) => {
 
   try {
     const product = await get(
-      'SELECT id, name, price, image_url AS imageUrl, description, has_size AS hasSize FROM products WHERE id = ?',
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        WHERE id = ?`,
       [id]
     );
 
@@ -232,10 +231,82 @@ app.get('/api/products/:id', async (req, res) => {
       return res.status(404).json({ message: 'Product not found.' });
     }
 
-    res.json(product);
+    res.json(mapProductRow(product));
   } catch (error) {
     console.error('Product detail error:', error);
     res.status(500).json({ message: 'Failed to load product detail.' });
+  }
+});
+
+app.post('/api/products', async (req, res) => {
+  try {
+    const { sellerId, name, price, stock, sizeOptions, imageUrl, description } = req.body || {};
+
+    const numericSellerId = Number.parseInt(sellerId, 10);
+    if (!Number.isInteger(numericSellerId) || numericSellerId <= 0) {
+      return res.status(400).json({ message: 'Invalid seller id supplied.' });
+    }
+
+    const seller = await get('SELECT id, role FROM users WHERE id = ?', [numericSellerId]);
+    if (!seller) {
+      return res.status(404).json({ message: 'Seller not found.' });
+    }
+
+    const sellerRole = normaliseRole(seller.role) || 'customer';
+    if (sellerRole !== 'seller') {
+      return res.status(403).json({ message: 'Only sellers can add products.' });
+    }
+
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    if (!trimmedName) {
+      return res.status(400).json({ message: 'Product name is required.' });
+    }
+
+    const priceValue = Number.parseFloat(price);
+    if (!Number.isFinite(priceValue) || priceValue <= 0) {
+      return res.status(400).json({ message: 'Product price must be a positive number.' });
+    }
+
+    const stockValue = Number.parseInt(stock, 10);
+    if (!Number.isInteger(stockValue) || stockValue < 0) {
+      return res.status(400).json({ message: 'Product stock must be zero or a positive integer.' });
+    }
+
+    const serializedSizes = serialiseSizeOptions(sizeOptions);
+    const normalisedImageUrl =
+      typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
+    const normalisedDescription =
+      typeof description === 'string' && description.trim() ? description.trim() : null;
+
+    const result = await run(
+      `INSERT INTO products (seller_id, name, price, stock, size_options, image_url, description)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        numericSellerId,
+        trimmedName,
+        priceValue,
+        stockValue,
+        serializedSizes,
+        normalisedImageUrl,
+        normalisedDescription,
+      ]
+    );
+
+    const product = await get(
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        WHERE id = ?`,
+      [result.lastID]
+    );
+
+    res.status(201).json({
+      message: 'Product created successfully.',
+      product: mapProductRow(product),
+    });
+  } catch (error) {
+    console.error('Product creation error:', error);
+    res.status(500).json({ message: 'Failed to create product.' });
   }
 });
 
