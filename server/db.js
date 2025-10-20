@@ -89,6 +89,7 @@ async function createOrdersTable() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id INTEGER NOT NULL,
       seller_id INTEGER NOT NULL,
+      customer_id INTEGER,
       quantity INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'pending',
       buyer_name TEXT,
@@ -97,7 +98,8 @@ async function createOrdersTable() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
-      FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `;
 
@@ -112,95 +114,106 @@ async function migrateLegacyOrdersTableIfNeeded(columns) {
   await run('DROP TRIGGER IF EXISTS orders_updated_at_trigger');
 
   const hasModernId = columns.some((column) => column.name === 'id');
+  const hasCustomerId = columns.some((column) => column.name === 'customer_id');
 
-  if (hasModernId) {
+  if (!hasModernId) {
+    const backupTable = `orders_backup_${Date.now()}`;
+
+    await run(`ALTER TABLE orders RENAME TO ${backupTable}`);
+    await createOrdersTable();
+
+    const legacyColumns = await all(`PRAGMA table_info(${backupTable})`);
+    const legacyNames = legacyColumns.map((column) => column.name);
+
+    const selectIdPart = legacyNames.includes('id')
+      ? 'id'
+      : legacyNames.includes('order_id')
+        ? 'order_id AS id'
+        : 'NULL AS id';
+
+    const selectProductPart = legacyNames.includes('product_id')
+      ? 'product_id'
+      : legacyNames.includes('productId')
+        ? 'productId AS product_id'
+        : 'NULL AS product_id';
+
+    const selectSellerPart = legacyNames.includes('seller_id')
+      ? 'seller_id'
+      : legacyNames.includes('sellerId')
+        ? 'sellerId AS seller_id'
+        : 'NULL AS seller_id';
+
+    const selectCustomerPart = legacyNames.includes('customer_id')
+      ? 'customer_id'
+      : legacyNames.includes('customerId')
+        ? 'customerId AS customer_id'
+        : 'NULL AS customer_id';
+
+    const selectQuantityPart = legacyNames.includes('quantity')
+      ? 'quantity'
+      : '1 AS quantity';
+
+    const selectStatusPart = legacyNames.includes('status')
+      ? 'status'
+      : `'pending' AS status`;
+
+    const selectBuyerNamePart = legacyNames.includes('buyer_name')
+      ? 'buyer_name'
+      : legacyNames.includes('buyerName')
+        ? 'buyerName AS buyer_name'
+        : 'NULL AS buyer_name';
+
+    const selectAddressPart = legacyNames.includes('shipping_address')
+      ? 'shipping_address'
+      : legacyNames.includes('shippingAddress')
+        ? 'shippingAddress AS shipping_address'
+        : 'NULL AS shipping_address';
+
+    const selectPaymentPart = legacyNames.includes('payment_method')
+      ? 'payment_method'
+      : legacyNames.includes('paymentMethod')
+        ? 'paymentMethod AS payment_method'
+        : 'NULL AS payment_method';
+
+    const selectCreatedPart = legacyNames.includes('created_at')
+      ? 'created_at'
+      : legacyNames.includes('createdAt')
+        ? 'createdAt AS created_at'
+        : 'CURRENT_TIMESTAMP AS created_at';
+
+    const selectUpdatedPart = legacyNames.includes('updated_at')
+      ? 'updated_at'
+      : legacyNames.includes('updatedAt')
+        ? 'updatedAt AS updated_at'
+        : 'CURRENT_TIMESTAMP AS updated_at';
+
+    const selectParts = [
+      selectIdPart,
+      selectProductPart,
+      selectSellerPart,
+      selectCustomerPart,
+      selectQuantityPart,
+      selectStatusPart,
+      selectBuyerNamePart,
+      selectAddressPart,
+      selectPaymentPart,
+      selectCreatedPart,
+      selectUpdatedPart,
+    ];
+
+    await run(
+      `INSERT INTO orders (id, product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, payment_method, created_at, updated_at)
+       SELECT ${selectParts.join(', ')}
+       FROM ${backupTable}`
+    );
+
+    await run(`DROP TABLE ${backupTable}`);
     return;
   }
 
-  const backupTable = `orders_backup_${Date.now()}`;
-
-  await run(`ALTER TABLE orders RENAME TO ${backupTable}`);
-  await createOrdersTable();
-
-  const legacyColumns = await all(`PRAGMA table_info(${backupTable})`);
-  const legacyNames = legacyColumns.map((column) => column.name);
-
-  const selectIdPart = legacyNames.includes('id')
-    ? 'id'
-    : legacyNames.includes('order_id')
-      ? 'order_id AS id'
-      : 'NULL AS id';
-
-  const selectProductPart = legacyNames.includes('product_id')
-    ? 'product_id'
-    : legacyNames.includes('productId')
-      ? 'productId AS product_id'
-      : 'NULL AS product_id';
-
-  const selectSellerPart = legacyNames.includes('seller_id')
-    ? 'seller_id'
-    : legacyNames.includes('sellerId')
-      ? 'sellerId AS seller_id'
-      : 'NULL AS seller_id';
-
-  const selectQuantityPart = legacyNames.includes('quantity')
-    ? 'quantity'
-    : '1 AS quantity';
-
-  const selectStatusPart = legacyNames.includes('status')
-    ? 'status'
-    : `'pending' AS status`;
-
-  const selectBuyerNamePart = legacyNames.includes('buyer_name')
-    ? 'buyer_name'
-    : legacyNames.includes('buyerName')
-      ? 'buyerName AS buyer_name'
-      : 'NULL AS buyer_name';
-
-  const selectAddressPart = legacyNames.includes('shipping_address')
-    ? 'shipping_address'
-    : legacyNames.includes('shippingAddress')
-      ? 'shippingAddress AS shipping_address'
-      : 'NULL AS shipping_address';
-
-  const selectPaymentPart = legacyNames.includes('payment_method')
-    ? 'payment_method'
-    : legacyNames.includes('paymentMethod')
-      ? 'paymentMethod AS payment_method'
-      : 'NULL AS payment_method';
-
-  const selectCreatedPart = legacyNames.includes('created_at')
-    ? 'created_at'
-    : legacyNames.includes('createdAt')
-      ? 'createdAt AS created_at'
-      : 'CURRENT_TIMESTAMP AS created_at';
-
-  const selectUpdatedPart = legacyNames.includes('updated_at')
-    ? 'updated_at'
-    : legacyNames.includes('updatedAt')
-      ? 'updatedAt AS updated_at'
-      : 'CURRENT_TIMESTAMP AS updated_at';
-
-  const selectParts = [
-    selectIdPart,
-    selectProductPart,
-    selectSellerPart,
-    selectQuantityPart,
-    selectStatusPart,
-    selectBuyerNamePart,
-    selectAddressPart,
-    selectPaymentPart,
-    selectCreatedPart,
-    selectUpdatedPart,
-  ];
-
-  await run(
-    `INSERT INTO orders (id, product_id, seller_id, quantity, status, buyer_name, shipping_address, payment_method, created_at, updated_at)
-     SELECT ${selectParts.join(', ')}
-     FROM ${backupTable}`
-  );
-
-  await run(`DROP TABLE ${backupTable}`);
+  if (!hasCustomerId) {
+    await run('ALTER TABLE orders ADD COLUMN customer_id INTEGER');
+  }
 }
 
 async function ensureOrdersUpdatedAtTrigger() {
@@ -427,3 +440,4 @@ module.exports = {
   initialize,
   databaseFile,
 };
+

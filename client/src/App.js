@@ -118,6 +118,7 @@ const ordersFetchInFlight = useRef(false);
     ? 'Click here to login.'
     : "Don't have ID ? Click here to register";
   const isSeller = user?.role === 'seller';
+  const isCustomer = user?.role === 'customer';
   const isHomeView = currentView === VIEW.HOME;
   const isCartView = currentView === VIEW.CART;
   const isCheckoutView = currentView === VIEW.CHECKOUT;
@@ -130,9 +131,9 @@ const ordersFetchInFlight = useRef(false);
     setIsPlacingOrder(false);
   };
 
-  const fetchSellerOrders = useCallback(
+  const fetchOrders = useCallback(
     (force = false) => {
-      if (!isSeller || !user?.id) {
+      if (!user?.id || (!isSeller && !isCustomer)) {
         return;
       }
 
@@ -148,7 +149,11 @@ const ordersFetchInFlight = useRef(false);
       setIsLoadingOrders(true);
       setOrdersError(null);
 
-      fetch(`/api/sellers/${user.id}/orders`)
+      const endpoint = isSeller
+        ? `/api/sellers/${user.id}/orders`
+        : `/api/users/${user.id}/orders`;
+
+      fetch(endpoint)
         .then(async (response) => {
           if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
@@ -162,13 +167,14 @@ const ordersFetchInFlight = useRef(false);
         })
         .catch((error) => {
           setOrdersError(error.message);
+          setHasLoadedOrders(false);
         })
         .finally(() => {
           setIsLoadingOrders(false);
           ordersFetchInFlight.current = false;
         });
     },
-    [hasLoadedOrders, isSeller, user?.id]
+    [hasLoadedOrders, isCustomer, isSeller, user?.id]
   );
 
   useEffect(() => {
@@ -368,7 +374,7 @@ const ordersFetchInFlight = useRef(false);
   }, [user]);
 
   useEffect(() => {
-    if (!isSeller || !user?.id) {
+    if (!user?.id || (!isSeller && !isCustomer)) {
       return;
     }
 
@@ -376,8 +382,8 @@ const ordersFetchInFlight = useRef(false);
       return;
     }
 
-    fetchSellerOrders();
-  }, [currentView, fetchSellerOrders, isSeller, user?.id]);
+    fetchOrders();
+  }, [currentView, fetchOrders, isCustomer, isSeller, user?.id]);
 
   const filteredProducts = useMemo(() => {
     if (!searchText) {
@@ -792,6 +798,7 @@ const ordersFetchInFlight = useRef(false);
             fullName: checkoutForm.fullName.trim(),
             address: checkoutForm.address.trim(),
             paymentMethod: checkoutForm.paymentMethod,
+            userId: isCustomer ? user?.id ?? null : null,
           },
         }),
       });
@@ -803,6 +810,7 @@ const ordersFetchInFlight = useRef(false);
       }
 
       const updatedProducts = Array.isArray(payload?.products) ? payload.products : [];
+      const createdOrders = Array.isArray(payload?.orders) ? payload.orders : [];
 
       setCheckoutStatus({
         type: 'success',
@@ -822,6 +830,23 @@ const ordersFetchInFlight = useRef(false);
           updates.has(product.id) ? { ...product, ...updates.get(product.id) } : product
         );
       });
+
+      if (createdOrders.length > 0) {
+        setOrders((prev) => {
+          const existing = Array.isArray(prev) ? prev : [];
+          const existingIds = new Set(existing.map((order) => order.id));
+          const merged = [
+            ...createdOrders.filter((order) => !existingIds.has(order.id)),
+            ...existing,
+          ];
+          return merged;
+        });
+      }
+
+      setHasLoadedOrders(false);
+      if (isCustomer) {
+        fetchOrders(true);
+      }
 
       setSelectedProduct((current) => {
         if (!current) {
@@ -843,8 +868,11 @@ const ordersFetchInFlight = useRef(false);
   };
 
   const handleUpdateOrderStatus = async (orderId, currentStatus) => {
-    const config = ORDER_STATUS_ACTIONS[currentStatus];
+    if (!isSeller) {
+      return;
+    }
 
+    const config = ORDER_STATUS_ACTIONS[currentStatus];
     if (!config || !orderId) {
       return;
     }
@@ -1008,7 +1036,6 @@ const ordersFetchInFlight = useRef(false);
           >
             {cartCount > 0 ? `Cart (${cartCount})` : 'Cart'}
           </button>
-          <a href="#about">About</a>
           {isSeller ? (
             <>
               <button
@@ -1026,7 +1053,16 @@ const ordersFetchInFlight = useRef(false);
                 {isAddProductVisible ? 'View products' : 'Add product'}
               </button>
             </>
+          ) : isCustomer ? (
+            <button
+              type="button"
+              onClick={handleNavOrders}
+              className={isOrdersView ? 'active' : ''}
+            >
+              Orders
+            </button>
           ) : null}
+          <a href="#about">About</a>
           <button type="button" onClick={handleLogout}>
             Logout
           </button>
@@ -1137,88 +1173,123 @@ const ordersFetchInFlight = useRef(false);
           </section>
         ) : null}
 
-        {isSeller && isOrdersView ? (
+        {isOrdersView ? (
           <section className="orders-panel">
-            <header className="orders-header">
-              <h2>Orders</h2>
-              <div className="orders-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => fetchSellerOrders(true)}
-                  disabled={isLoadingOrders}
-                >
-                  {isLoadingOrders ? 'Refreshing...' : 'Refresh'}
-                </button>
-              </div>
-            </header>
-            {ordersError ? <p className="orders-feedback error">{ordersError}</p> : null}
-            {isLoadingOrders ? (
-              <p className="orders-status">Loading orders...</p>
-            ) : orders.length === 0 ? (
-              <p className="orders-status">No orders yet.</p>
-            ) : (
-              <ul className="orders-list">
-                {orders.map((order) => {
-                  const action = ORDER_STATUS_ACTIONS[order.status];
-                  const isUpdating = Boolean(orderUpdateStates[order.id]);
-                  const productImage = order.product?.imageUrl || PLACEHOLDER_IMAGE;
-                  const statusLabel = ORDER_STATUS_LABELS[order.status] || order.status;
-                  const createdAtLabel = formatDateTime(order.createdAt);
+            {(() => {
+              const canManageOrders = isSeller;
+              const ordersTitle = canManageOrders ? 'Orders' : 'My orders';
+              const ordersEmptyLabel = canManageOrders
+                ? 'No orders yet.'
+                : 'You have not placed any orders yet.';
+              const ordersLoadingLabel = canManageOrders
+                ? 'Loading orders...'
+                : 'Loading your orders...';
 
-                  return (
-                    <li key={order.id} className="order-card">
-                      <div className="order-product">
-                        <img src={productImage} alt={order.product?.name || 'Ordered product'} />
-                        <div>
-                          <h3>{order.product?.name || 'Product unavailable'}</h3>
-                          <p className="order-price">{formatCurrency(order.product?.price || 0)}</p>
-                        </div>
-                      </div>
-                      <div className="order-details">
-                        <p>
-                          <strong>Quantity:</strong> {order.quantity}
-                        </p>
-                        <p>
-                          <strong>Status:</strong>{' '}
-                          <span className={`order-status order-status--${order.status}`}>
-                            {statusLabel}
-                          </span>
-                        </p>
-                        {order.buyerName ? (
-                          <p>
-                            <strong>Buyer:</strong> {order.buyerName}
-                          </p>
-                        ) : null}
-                        {order.shippingAddress ? (
-                          <p>
-                            <strong>Address:</strong> {order.shippingAddress}
-                          </p>
-                        ) : null}
-                        {createdAtLabel ? (
-                          <p>
-                            <strong>Ordered:</strong> {createdAtLabel}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="order-actions">
-                        {action ? (
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateOrderStatus(order.id, order.status)}
-                            disabled={isUpdating}
-                          >
-                            {isUpdating ? 'Updating...' : action.label}
-                          </button>
-                        ) : (
-                          <span className="order-status-final">Completed</span>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+              return (
+                <>
+                  <header className="orders-header">
+                    <h2>{ordersTitle}</h2>
+                    <div className="orders-actions">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => fetchOrders(true)}
+                        disabled={isLoadingOrders}
+                      >
+                        {isLoadingOrders ? 'Refreshing...' : 'Refresh'}
+                      </button>
+                    </div>
+                  </header>
+                  {ordersError ? <p className="orders-feedback error">{ordersError}</p> : null}
+                  {isLoadingOrders ? (
+                    <p className="orders-status">{ordersLoadingLabel}</p>
+                  ) : orders.length === 0 ? (
+                    <p className="orders-status">{ordersEmptyLabel}</p>
+                  ) : (
+                    <ul className="orders-list">
+                      {orders.map((order) => {
+                        const action = canManageOrders ? ORDER_STATUS_ACTIONS[order.status] : null;
+                        const isUpdating = Boolean(orderUpdateStates[order.id]);
+                        const productImage = order.product?.imageUrl || PLACEHOLDER_IMAGE;
+                        const productName = order.product?.name || 'Product unavailable';
+                        const statusLabel = ORDER_STATUS_LABELS[order.status] || order.status;
+                        const createdAtLabel = formatDateTime(order.createdAt);
+                        const updatedAtLabel = formatDateTime(order.updatedAt);
+                        const productPrice = Number.isFinite(order.product?.price)
+                          ? order.product.price
+                          : Number.parseFloat(order.product?.price ?? 0) || 0;
+                        const orderTotal = productPrice * (order.quantity || 0);
+
+                        return (
+                          <li key={order.id} className="order-card">
+                            <div className="order-product">
+                              <img src={productImage} alt={productName} />
+                              <div>
+                                <h3>{productName}</h3>
+                                <p className="order-price">{formatCurrency(productPrice)}</p>
+                                <p>
+                                  <strong>Order #:</strong> {order.id}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="order-details">
+                              {!canManageOrders ? (
+                                <p>
+                                  <strong>Seller ID:</strong> {order.sellerId ?? 'N/A'}
+                                </p>
+                              ) : null}
+                              <p>
+                                <strong>Quantity:</strong> {order.quantity}
+                              </p>
+                              <p>
+                                <strong>Total:</strong> {formatCurrency(orderTotal)}
+                              </p>
+                              <p>
+                                <strong>Status:</strong>{' '}
+                                <span className={`order-status order-status--${order.status}`}>
+                                  {statusLabel}
+                                </span>
+                              </p>
+                              {canManageOrders && order.buyerName ? (
+                                <p>
+                                  <strong>Buyer:</strong> {order.buyerName}
+                                </p>
+                              ) : null}
+                              {canManageOrders && order.shippingAddress ? (
+                                <p>
+                                  <strong>Address:</strong> {order.shippingAddress}
+                                </p>
+                              ) : null}
+                              <p>
+                                <strong>Ordered:</strong> {createdAtLabel || 'Unknown'}
+                              </p>
+                              {updatedAtLabel ? (
+                                <p>
+                                  <strong>Updated:</strong> {updatedAtLabel}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="order-actions">
+                              {action ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderStatus(order.id, order.status)}
+                                  disabled={isUpdating}
+                                >
+                                  {isUpdating ? 'Updating...' : action.label}
+                                </button>
+                              ) : (
+                                <span className="order-status-final">{statusLabel}</span>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </>
+              );
+            })()}
           </section>
         ) : null}
 
@@ -1555,3 +1626,7 @@ const ordersFetchInFlight = useRef(false);
 }
 
 export default App;
+
+
+
+

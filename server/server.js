@@ -115,11 +115,13 @@ function mapOrderRow(row) {
   const quantityValue = Number.isInteger(row.quantity)
     ? row.quantity
     : Number.parseInt(row.quantity ?? 0, 10) || 0;
+  const customerSource = row.customerId ?? row.customer_id ?? null;
 
   return {
     id: row.id,
     productId: row.productId ?? row.product_id ?? null,
     sellerId: row.sellerId ?? row.seller_id ?? null,
+    customerId: customerSource,
     quantity: quantityValue,
     status: row.status,
     buyerName: row.buyerName ?? row.buyer_name ?? null,
@@ -356,6 +358,13 @@ app.post('/api/products', async (req, res) => {
 app.post('/api/orders', async (req, res) => {
   const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
   const customer = req.body?.customer ?? {};
+  const customerUserIdRaw =
+    Object.prototype.hasOwnProperty.call(customer, 'userId') && customer.userId !== undefined
+      ? customer.userId
+      : req.body?.customerId;
+  const parsedCustomerId = Number.parseInt(customerUserIdRaw, 10);
+  const customerIdGlobal =
+    Number.isInteger(parsedCustomerId) && parsedCustomerId > 0 ? parsedCustomerId : null;
 
   if (rawItems.length === 0) {
     return res.status(400).json({ message: 'At least one item is required.' });
@@ -405,6 +414,8 @@ app.post('/api/orders', async (req, res) => {
       }
 
       await run('UPDATE products SET stock = stock - ? WHERE id = ?', [item.quantity, item.productId]);
+      const customerId = customerIdGlobal;
+
 
       const updatedRow = await get(
         `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
@@ -419,11 +430,12 @@ app.post('/api/orders', async (req, res) => {
       }
 
       const orderInsert = await run(
-        `INSERT INTO orders (product_id, seller_id, quantity, status, buyer_name, shipping_address, payment_method)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orders (product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           product.id,
           product.sellerId || null,
+          customerId,
           item.quantity,
           ORDER_STATUS.PENDING,
           typeof customer.fullName === 'string' ? customer.fullName.trim() : null,
@@ -437,6 +449,7 @@ app.post('/api/orders', async (req, res) => {
            o.id,
            o.product_id,
            o.seller_id,
+           o.customer_id,
            o.quantity,
            o.status,
            o.buyer_name,
@@ -504,6 +517,7 @@ app.get('/api/sellers/:sellerId/orders', async (req, res) => {
          o.id,
          o.product_id,
          o.seller_id,
+         o.customer_id,
          o.quantity,
          o.status,
          o.buyer_name,
@@ -531,6 +545,53 @@ app.get('/api/sellers/:sellerId/orders', async (req, res) => {
   }
 });
 
+app.get('/api/users/:userId/orders', async (req, res) => {
+  const userId = Number.parseInt(req.params.userId, 10);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Invalid user id supplied.' });
+  }
+
+  try {
+    const userRecord = await get('SELECT id FROM users WHERE id = ?', [userId]);
+
+    if (!userRecord) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    const rows = await all(
+      `SELECT
+         o.id,
+         o.product_id,
+         o.seller_id,
+         o.customer_id,
+         o.quantity,
+         o.status,
+         o.buyer_name,
+         o.shipping_address,
+         o.payment_method,
+         o.created_at,
+         o.updated_at,
+         p.name AS product_name,
+         p.price AS product_price,
+         p.image_url AS product_image_url,
+         p.description AS product_description,
+         p.size_options AS product_size_options,
+         p.stock AS product_stock
+       FROM orders o
+       JOIN products p ON p.id = o.product_id
+      WHERE o.customer_id = ?
+      ORDER BY o.created_at DESC`,
+      [userId]
+    );
+
+    res.json(rows.map(mapOrderRow));
+  } catch (error) {
+    console.error('Customer orders fetch error:', error);
+    res.status(500).json({ message: 'Failed to load orders.' });
+  }
+});
+
 app.patch('/api/orders/:orderId/status', async (req, res) => {
   const orderId = Number.parseInt(req.params.orderId, 10);
   const rawStatus = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : '';
@@ -549,6 +610,7 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
          o.id,
          o.product_id,
          o.seller_id,
+         o.customer_id,
          o.quantity,
          o.status,
          o.buyer_name,
@@ -593,6 +655,7 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
          o.id,
          o.product_id,
          o.seller_id,
+         o.customer_id,
          o.quantity,
          o.status,
          o.buyer_name,

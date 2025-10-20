@@ -767,6 +767,16 @@ body {
   cursor: pointer;
 }
 
+.orders-actions .secondary:hover {
+  background: #e0e6ff;
+}
+
+.orders-actions .secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+
 .orders-actions .secondary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -1453,6 +1463,22 @@ body {
     max-height: 200px;
   }
 
+  .order-card {
+    grid-template-columns: 1fr;
+  }
+
+  .order-actions {
+    align-items: stretch;
+  }
+
+  .order-actions button {
+    width: 100%;
+  }
+
+  .orders-actions {
+    justify-content: center;
+  }
+
   .cart-summary-actions,
   .checkout-actions {
     justify-content: center;
@@ -1515,6 +1541,8 @@ body {
     padding: 1rem;
   }
 }
+
+
 
 
 
