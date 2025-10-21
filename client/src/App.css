@@ -882,6 +882,11 @@ body {
   color: #1a7f3b;
 }
 
+.order-status--completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
 .order-actions {
   display: flex;
   flex-direction: column;
@@ -902,6 +907,11 @@ body {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   box-shadow: 0 12px 24px rgba(79, 113, 255, 0.3);
 }
+.order-actions button.order-receive {
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+}
+
+
 
 .order-actions button:disabled {
   opacity: 0.6;
@@ -913,6 +923,10 @@ body {
 .order-actions button:not(:disabled):hover {
   transform: translateY(-2px);
   box-shadow: 0 16px 28px rgba(79, 113, 255, 0.4);
+}
+
+.order-actions button.order-receive:not(:disabled):hover {
+  box-shadow: 0 18px 32px rgba(34, 197, 94, 0.4);
 }
 
 .order-status-final {
@@ -1463,19 +1477,23 @@ body {
     max-height: 200px;
   }
 
-  .order-card {
+  .order-card,
+  .my-product-card {
     grid-template-columns: 1fr;
   }
 
-  .order-actions {
+  .order-actions,
+  .my-product-actions {
     align-items: stretch;
   }
 
-  .order-actions button {
+  .order-actions button,
+  .my-product-actions button {
     width: 100%;
   }
 
-  .orders-actions {
+  .orders-actions,
+  .my-products-actions {
     justify-content: center;
   }
 
@@ -1546,5 +1564,160 @@ body {
 
 
 
+
+
+
+
+.my-products-panel {
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--neutral-900);
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(12, 32, 110, 0.2);
+  padding: clamp(1.2rem, 4vw, 2rem);
+  margin-bottom: clamp(1.5rem, 4vw, 2.5rem);
+}
+
+.my-products-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.my-products-header h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+}
+
+.my-products-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.my-products-actions .secondary {
+  background: #f0f2ff;
+  color: #1f2548;
+  border: 1px solid rgba(31, 37, 72, 0.2);
+  border-radius: 12px;
+  padding: 0.6rem 1.4rem;
+  font-weight: 600;
+  letter-spacing: 0.08rem;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.my-products-actions .secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.my-products-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.my-product-card {
+  background: #f7f8ff;
+  border: 1px solid rgba(15, 33, 90, 0.08);
+  border-radius: 16px;
+  padding: clamp(1rem, 3vw, 1.4rem);
+  display: grid;
+  gap: 1rem;
+}
+
+.my-product-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.my-product-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.my-product-id {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #3f4a7c;
+}
+
+.my-product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.my-product-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.my-product-grid input,
+.my-product-grid textarea {
+  border: 1px solid rgba(31, 37, 72, 0.2);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+  background: #ffffff;
+  color: inherit;
+}
+
+.my-product-grid textarea {
+  resize: vertical;
+  min-height: 110px;
+}
+
+.my-product-full {
+  grid-column: 1 / -1;
+}
+
+.my-product-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.my-product-actions button {
+  background: linear-gradient(135deg, #4b5dff, #88a1ff);
+  color: #ffffff;
+  border: none;
+  border-radius: 12px;
+  padding: 0.65rem 1.4rem;
+  font-weight: 600;
+  letter-spacing: 0.1rem;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 12px 24px rgba(79, 113, 255, 0.3);
+}
+
+.my-product-actions .secondary {
+  background: transparent;
+  border: 1px solid rgba(31, 37, 72, 0.2);
+  color: #1f2548;
+  box-shadow: none;
+}
+
+.my-product-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.my-product-actions button:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 28px rgba(79, 113, 255, 0.4);
+}
 
 

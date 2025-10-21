@@ -11,11 +11,13 @@ const ORDER_STATUS = {
   PENDING: 'pending',
   PACKING: 'packing',
   SHIPPED: 'shipped',
+  COMPLETED: 'completed',
 };
 const VALID_ORDER_STATUSES = new Set(Object.values(ORDER_STATUS));
 const ORDER_STATUS_FLOW = {
   [ORDER_STATUS.PENDING]: ORDER_STATUS.PACKING,
   [ORDER_STATUS.PACKING]: ORDER_STATUS.SHIPPED,
+  [ORDER_STATUS.SHIPPED]: ORDER_STATUS.COMPLETED,
 };
 
 app.use(cors());
@@ -355,6 +357,148 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
+app.get('/api/sellers/:sellerId/products', async (req, res) => {
+  const sellerId = Number.parseInt(req.params.sellerId, 10);
+
+  if (!Number.isInteger(sellerId) || sellerId <= 0) {
+    return res.status(400).json({ message: 'Invalid seller id supplied.' });
+  }
+
+  try {
+    const seller = await get('SELECT id, role FROM users WHERE id = ?', [sellerId]);
+
+    if (!seller) {
+      return res.status(404).json({ message: 'Seller not found.' });
+    }
+
+    const role = normaliseRole(seller.role) || 'customer';
+
+    if (role !== 'seller') {
+      return res.status(403).json({ message: 'Only sellers can view their products.' });
+    }
+
+    const rows = await all(
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        WHERE seller_id = ?
+        ORDER BY created_at DESC`,
+      [sellerId]
+    );
+
+    res.json(rows.map(mapProductRow));
+  } catch (error) {
+    console.error('Seller products fetch error:', error);
+    res.status(500).json({ message: 'Failed to load seller products.' });
+  }
+});
+
+app.patch('/api/products/:productId', async (req, res) => {
+  const productId = Number.parseInt(req.params.productId, 10);
+  const { sellerId, name, price, stock, sizeOptions, imageUrl, description } = req.body || {};
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return res.status(400).json({ message: 'Invalid product id supplied.' });
+  }
+
+  const numericSellerId = Number.parseInt(sellerId, 10);
+  if (!Number.isInteger(numericSellerId) || numericSellerId <= 0) {
+    return res.status(400).json({ message: 'Invalid seller id supplied.' });
+  }
+
+  try {
+    const existing = await get(
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        WHERE id = ?`,
+      [productId]
+    );
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Product not found.' });
+    }
+
+    if (existing.sellerId !== numericSellerId) {
+      return res.status(403).json({ message: 'You do not have permission to update this product.' });
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (name !== undefined) {
+      const trimmedName = typeof name === 'string' ? name.trim() : '';
+      if (!trimmedName) {
+        return res.status(400).json({ message: 'Product name is required.' });
+      }
+      updates.push('name = ?');
+      params.push(trimmedName);
+    }
+
+    if (price !== undefined) {
+      const parsedPrice = Number.parseFloat(price);
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        return res.status(400).json({ message: 'Price must be a positive number.' });
+      }
+      updates.push('price = ?');
+      params.push(parsedPrice);
+    }
+
+    if (stock !== undefined) {
+      const parsedStock = Number.parseInt(stock, 10);
+      if (!Number.isInteger(parsedStock) || parsedStock < 0) {
+        return res.status(400).json({ message: 'Stock must be zero or a positive integer.' });
+      }
+      updates.push('stock = ?');
+      params.push(parsedStock);
+    }
+
+    if (sizeOptions !== undefined) {
+      const serialisedSizes = serialiseSizeOptions(sizeOptions);
+      updates.push('size_options = ?');
+      params.push(serialisedSizes);
+    }
+
+    if (imageUrl !== undefined) {
+      const cleanedImage =
+        typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
+      updates.push('image_url = ?');
+      params.push(cleanedImage);
+    }
+
+    if (description !== undefined) {
+      const cleanedDescription =
+        typeof description === 'string' && description.trim() ? description.trim() : null;
+      updates.push('description = ?');
+      params.push(cleanedDescription);
+    }
+
+    if (updates.length === 0) {
+      return res.json({ message: 'No changes supplied.', product: mapProductRow(existing) });
+    }
+
+    params.push(productId);
+
+    await run(`UPDATE products SET ${updates.join(', ')} WHERE id = ?`, params);
+
+    const updated = await get(
+      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
+              image_url AS imageUrl, description
+         FROM products
+        WHERE id = ?`,
+      [productId]
+    );
+
+    res.json({
+      message: 'Product updated successfully.',
+      product: mapProductRow(updated),
+    });
+  } catch (error) {
+    console.error('Product update error:', error);
+    res.status(500).json({ message: 'Failed to update product.' });
+  }
+});
+
 app.post('/api/orders', async (req, res) => {
   const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
   const customer = req.body?.customer ?? {};
@@ -592,6 +736,98 @@ app.get('/api/users/:userId/orders', async (req, res) => {
   }
 });
 
+app.post('/api/orders/:orderId/receive', async (req, res) => {
+  const orderId = Number.parseInt(req.params.orderId, 10);
+  const customerId = Number.parseInt(req.body?.customerId, 10);
+
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({ message: 'Invalid order id supplied.' });
+  }
+
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    return res.status(400).json({ message: 'Invalid customer id supplied.' });
+  }
+
+  try {
+    const existing = await get(
+      `SELECT
+         o.id,
+         o.product_id,
+         o.seller_id,
+         o.customer_id,
+         o.quantity,
+         o.status,
+         o.buyer_name,
+         o.shipping_address,
+         o.payment_method,
+         o.created_at,
+         o.updated_at,
+         p.name AS product_name,
+         p.price AS product_price,
+         p.image_url AS product_image_url,
+         p.description AS product_description,
+         p.size_options AS product_size_options,
+         p.stock AS product_stock
+       FROM orders o
+       JOIN products p ON p.id = o.product_id
+      WHERE o.id = ?`,
+      [orderId]
+    );
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Order not found.' });
+    }
+
+    if (existing.customer_id && existing.customer_id !== customerId) {
+      return res.status(403).json({ message: 'You do not have permission to update this order.' });
+    }
+
+    if (existing.status !== ORDER_STATUS.SHIPPED) {
+      return res.status(400).json({ message: 'Order cannot be confirmed in the current status.' });
+    }
+
+    await run('UPDATE orders SET status = ?, customer_id = COALESCE(customer_id, ?) WHERE id = ?', [
+      ORDER_STATUS.COMPLETED,
+      customerId,
+      orderId,
+    ]);
+
+    const updated = await get(
+      `SELECT
+         o.id,
+         o.product_id,
+         o.seller_id,
+         o.customer_id,
+         o.quantity,
+         o.status,
+         o.buyer_name,
+         o.shipping_address,
+         o.payment_method,
+         o.created_at,
+         o.updated_at,
+         p.name AS product_name,
+         p.price AS product_price,
+         p.image_url AS product_image_url,
+         p.description AS product_description,
+         p.size_options AS product_size_options,
+         p.stock AS product_stock
+       FROM orders o
+       JOIN products p ON p.id = o.product_id
+      WHERE o.id = ?`,
+      [orderId]
+    );
+
+    res.json({
+      message: 'Order marked as received.',
+      order: mapOrderRow(updated),
+    });
+  } catch (error) {
+    console.error('Order receipt confirmation error:', error);
+    res.status(500).json({ message: 'Failed to confirm order receipt.' });
+  }
+});
+
+
 app.patch('/api/orders/:orderId/status', async (req, res) => {
   const orderId = Number.parseInt(req.params.orderId, 10);
   const rawStatus = typeof req.body?.status === 'string' ? req.body.status.trim().toLowerCase() : '';
@@ -749,3 +985,4 @@ initialize()
     console.error('Database initialization failed:', err);
     process.exit(1);
   });
+

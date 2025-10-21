@@ -21,6 +21,7 @@ const VIEW = {
   HOME: 'home',
   CART: 'cart',
   CHECKOUT: 'checkout',
+  MY_PRODUCTS: 'myProducts',
   ORDERS: 'orders',
 };
 
@@ -34,7 +35,7 @@ function formatCurrency(value) {
 function formatDateTime(value) {
   if (!value) {
     return '';
-  }
+  };
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
@@ -42,16 +43,35 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+function buildProductDraft(product = {}) {
+  return {
+    name: product.name ?? '',
+    price:
+      product.price !== undefined && product.price !== null
+        ? String(product.price)
+        : '',
+    stock:
+      product.stock !== undefined && product.stock !== null
+        ? String(product.stock)
+        : '',
+    sizeOptions: Array.isArray(product.sizeOptions) ? product.sizeOptions.join(', ') : '',
+    imageUrl: product.imageUrl ?? '',
+    description: product.description ?? '',
+  };
+}
+
 const ORDER_STATUS = {
   PENDING: 'pending',
   PACKING: 'packing',
   SHIPPED: 'shipped',
+  COMPLETED: 'completed',
 };
 
 const ORDER_STATUS_LABELS = {
   [ORDER_STATUS.PENDING]: 'Pending',
   [ORDER_STATUS.PACKING]: 'Packing',
   [ORDER_STATUS.SHIPPED]: 'Shipped',
+  [ORDER_STATUS.COMPLETED]: 'Completed',
 };
 
 const ORDER_STATUS_ACTIONS = {
@@ -107,10 +127,17 @@ const [checkoutForm, setCheckoutForm] = useState(() => ({ ...DEFAULT_CHECKOUT_FO
 const [isPlacingOrder, setIsPlacingOrder] = useState(false);
 const [orders, setOrders] = useState([]);
 const [isLoadingOrders, setIsLoadingOrders] = useState(false);
-const [ordersError, setOrdersError] = useState(null);
-const [orderUpdateStates, setOrderUpdateStates] = useState({});
-const [hasLoadedOrders, setHasLoadedOrders] = useState(false);
-const ordersFetchInFlight = useRef(false);
+  const [ordersFeedback, setOrdersFeedback] = useState(null);
+  const [orderUpdateStates, setOrderUpdateStates] = useState({});
+  const [hasLoadedOrders, setHasLoadedOrders] = useState(false);
+  const ordersFetchInFlight = useRef(false);
+  const [sellerProducts, setSellerProducts] = useState([]);
+  const [isLoadingSellerProducts, setIsLoadingSellerProducts] = useState(false);
+  const [sellerProductsFeedback, setSellerProductsFeedback] = useState(null);
+  const [sellerProductEdits, setSellerProductEdits] = useState({});
+  const [sellerProductSaving, setSellerProductSaving] = useState({});
+  const [hasLoadedSellerProducts, setHasLoadedSellerProducts] = useState(false);
+  const sellerProductsFetchInFlight = useRef(false);
 
   const isRegister = authMode === AUTH_MODE.REGISTER;
   const actionLabel = isRegister ? 'Register' : 'Login';
@@ -123,6 +150,7 @@ const ordersFetchInFlight = useRef(false);
   const isCartView = currentView === VIEW.CART;
   const isCheckoutView = currentView === VIEW.CHECKOUT;
   const isOrdersView = currentView === VIEW.ORDERS;
+  const isMyProductsView = currentView === VIEW.MY_PRODUCTS;
   const hasCartItems = cartItems.length > 0;
   const resetCheckoutFlow = () => {
     setCheckoutPayload(null);
@@ -147,7 +175,7 @@ const ordersFetchInFlight = useRef(false);
 
       ordersFetchInFlight.current = true;
       setIsLoadingOrders(true);
-      setOrdersError(null);
+      setOrdersFeedback(null);
 
       const endpoint = isSeller
         ? `/api/sellers/${user.id}/orders`
@@ -166,7 +194,7 @@ const ordersFetchInFlight = useRef(false);
           setHasLoadedOrders(true);
         })
         .catch((error) => {
-          setOrdersError(error.message);
+          setOrdersFeedback({ type: 'error', message: error.message });
           setHasLoadedOrders(false);
         })
         .finally(() => {
@@ -175,6 +203,71 @@ const ordersFetchInFlight = useRef(false);
         });
     },
     [hasLoadedOrders, isCustomer, isSeller, user?.id]
+  );
+
+  const fetchSellerProducts = useCallback(
+    (force = false) => {
+      if (!isSeller || !user?.id) {
+        return;
+      }
+
+      if (!force && hasLoadedSellerProducts) {
+        return;
+      }
+
+      if (sellerProductsFetchInFlight.current) {
+        return;
+      }
+
+      sellerProductsFetchInFlight.current = true;
+      setIsLoadingSellerProducts(true);
+      setSellerProductsFeedback(null);
+
+      fetch(`/api/sellers/${user.id}/products`)
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.message || 'Failed to load products.');
+          }
+          return response.json();
+        })
+        .then((items) => {
+          const list = Array.isArray(items) ? items : [];
+          setSellerProducts(list);
+          setSellerProductEdits((prev) => {
+            if (!force && Object.keys(prev || {}).length > 0) {
+              const next = { ...prev };
+              list.forEach((product) => {
+                if (!next[product.id]) {
+                  next[product.id] = buildProductDraft(product);
+                }
+              });
+              Object.keys(next).forEach((key) => {
+                if (!list.some((product) => String(product.id) === key)) {
+                  delete next[key];
+                }
+              });
+              return next;
+            }
+
+            const mapping = {};
+            list.forEach((product) => {
+              mapping[product.id] = buildProductDraft(product);
+            });
+            return mapping;
+          });
+          setHasLoadedSellerProducts(true);
+        })
+        .catch((error) => {
+          setSellerProductsFeedback({ type: 'error', message: error.message });
+          setHasLoadedSellerProducts(false);
+        })
+        .finally(() => {
+          setIsLoadingSellerProducts(false);
+          sellerProductsFetchInFlight.current = false;
+        });
+    },
+    [hasLoadedSellerProducts, isSeller, user?.id]
   );
 
   useEffect(() => {
@@ -291,7 +384,14 @@ const ordersFetchInFlight = useRef(false);
     setCartItems([]);
     setOrders([]);
     setIsLoadingOrders(false);
-    setOrdersError(null);
+    setOrdersFeedback(null);
+    setSellerProducts([]);
+    setIsLoadingSellerProducts(false);
+    setSellerProductsFeedback(null);
+    setSellerProductEdits({});
+    setSellerProductSaving({});
+    setHasLoadedSellerProducts(false);
+    sellerProductsFetchInFlight.current = false;
     setOrderUpdateStates({});
     setHasLoadedOrders(false);
     ordersFetchInFlight.current = false;
@@ -384,6 +484,18 @@ const ordersFetchInFlight = useRef(false);
 
     fetchOrders();
   }, [currentView, fetchOrders, isCustomer, isSeller, user?.id]);
+
+  useEffect(() => {
+    if (!isSeller || !user?.id) {
+      return;
+    }
+
+    if (currentView !== VIEW.MY_PRODUCTS) {
+      return;
+    }
+
+    fetchSellerProducts();
+  }, [currentView, fetchSellerProducts, isSeller, user?.id]);
 
   const filteredProducts = useMemo(() => {
     if (!searchText) {
@@ -506,6 +618,13 @@ const ordersFetchInFlight = useRef(false);
     closeProductDetail();
   };
 
+  const handleNavMyProducts = () => {
+    resetCheckoutFlow();
+    setIsAddProductVisible(false);
+    setCurrentView(VIEW.MY_PRODUCTS);
+    closeProductDetail();
+    setSellerProductsFeedback(null);
+  };
   const handleNavOrders = () => {
     resetCheckoutFlow();
     setIsAddProductVisible(false);
@@ -517,8 +636,16 @@ const ordersFetchInFlight = useRef(false);
     closeProductDetail();
     setProductFormFeedback(null);
     resetCheckoutFlow();
-    setCurrentView(VIEW.HOME);
-    setIsAddProductVisible((prev) => !prev);
+    setIsAddProductVisible((prev) => {
+      const next = !prev;
+      if (next) {
+        setCurrentView(VIEW.HOME);
+      } else {
+        setCurrentView(VIEW.MY_PRODUCTS);
+        setSellerProductsFeedback(null);
+      }
+      return next;
+    });
   };
 
   const handleNewProductChange = (event) => {
@@ -602,9 +729,21 @@ const ordersFetchInFlight = useRef(false);
         throw new Error(payload?.message || 'Failed to create product.');
       }
 
-      if (payload?.product) {
-        setProducts((prev) => [payload.product, ...(Array.isArray(prev) ? prev : [])]);
-      }
+        if (payload?.product) {
+          setProducts((prev) => [payload.product, ...(Array.isArray(prev) ? prev : [])]);
+
+          if (isSeller && user?.id === payload.product.sellerId) {
+            setSellerProducts((prev) => {
+              const list = Array.isArray(prev) ? prev : [];
+              const filtered = list.filter((item) => item.id !== payload.product.id);
+              return [payload.product, ...filtered];
+            });
+            setSellerProductEdits((prev) => ({
+              ...prev,
+              [payload.product.id]: buildProductDraft(payload.product),
+            }));
+          }
+        }
 
       setProductFormFeedback({
         type: 'success',
@@ -878,7 +1017,7 @@ const ordersFetchInFlight = useRef(false);
     }
 
     setOrderUpdateStates((prev) => ({ ...prev, [orderId]: true }));
-    setOrdersError(null);
+    setOrdersFeedback(null);
 
     try {
       const response = await fetch(`/api/orders/${orderId}/status`, {
@@ -899,13 +1038,180 @@ const ordersFetchInFlight = useRef(false);
             ? prev.map((order) => (order.id === payload.order.id ? payload.order : order))
             : []
         );
+        setOrdersFeedback({ type: 'success', message: 'Order status updated.' });
       }
     } catch (error) {
-      setOrdersError(error.message);
+      setOrdersFeedback({ type: 'error', message: error.message });
     } finally {
       setOrderUpdateStates((prev) => {
         const next = { ...prev };
         delete next[orderId];
+        return next;
+      });
+    }
+  };
+
+  const handleConfirmOrderReceived = async (orderId) => {
+    if (!isCustomer || !user?.id) {
+      return;
+    }
+
+    setOrderUpdateStates((prev) => ({ ...prev, [orderId]: true }));
+    setOrdersFeedback(null);
+
+    try {
+      const response = await fetch(`/api/orders/${orderId}/receive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: user.id }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.message || 'Failed to confirm delivery.');
+      }
+
+      if (payload?.order) {
+        setOrders((prev) =>
+          Array.isArray(prev)
+            ? prev.map((order) => (order.id === payload.order.id ? payload.order : order))
+            : []
+        );
+        setOrdersFeedback({
+          type: 'success',
+          message: 'Thank you! The seller has been notified that you received the order.',
+        });
+      }
+    } catch (error) {
+      setOrdersFeedback({ type: 'error', message: error.message });
+    } finally {
+      setOrderUpdateStates((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    }
+  };
+  const handleSellerProductChange = (productId, field, value) => {
+    setSellerProductsFeedback(null);
+    setSellerProductEdits((prev) => {
+      const next = { ...prev };
+      const existingDraft = next[productId] ?? buildProductDraft(sellerProducts.find((item) => item.id === productId));
+      next[productId] = {
+        ...existingDraft,
+        [field]: value,
+      };
+      return next;
+    });
+  };
+
+  const handleResetSellerProduct = (productId) => {
+    const product = sellerProducts.find((item) => item.id === productId);
+    if (!product) {
+      return;
+    }
+    setSellerProductsFeedback(null);
+    setSellerProductEdits((prev) => ({
+      ...prev,
+      [productId]: buildProductDraft(product),
+    }));
+  };
+
+  const handleSaveSellerProduct = async (productId) => {
+    if (!isSeller || !user?.id) {
+      return;
+    }
+
+    const product = sellerProducts.find((item) => item.id === productId);
+    const draft = sellerProductEdits[productId] ?? buildProductDraft(product);
+
+    if (!product) {
+      setSellerProductsFeedback({ type: 'error', message: 'Product not found.' });
+      return;
+    }
+
+    const trimmedName = draft.name?.trim() || '';
+    if (!trimmedName) {
+      setSellerProductsFeedback({ type: 'error', message: 'Product name is required.' });
+      return;
+    }
+
+    const parsedPrice = Number.parseFloat(draft.price);
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      setSellerProductsFeedback({ type: 'error', message: 'Enter a price greater than zero.' });
+      return;
+    }
+
+    const parsedStock = Number.parseInt(draft.stock, 10);
+    if (!Number.isInteger(parsedStock) || parsedStock < 0) {
+      setSellerProductsFeedback({ type: 'error', message: 'Stock must be zero or a positive number.' });
+      return;
+    }
+
+    const sizeList = (draft.sizeOptions || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    setSellerProductsFeedback(null);
+    setSellerProductSaving((prev) => ({ ...prev, [productId]: true }));
+
+    try {
+      const response = await fetch(`/api/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sellerId: user.id,
+          name: trimmedName,
+          price: parsedPrice,
+          stock: parsedStock,
+          sizeOptions: sizeList,
+          imageUrl: draft.imageUrl?.trim() || null,
+          description: draft.description?.trim() || null,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.message || 'Failed to update product.');
+      }
+
+      if (payload?.product) {
+        setSellerProducts((prev) => {
+          const list = Array.isArray(prev) ? prev : [];
+          return list.map((item) => (item.id === payload.product.id ? payload.product : item));
+        });
+
+        setProducts((prev) => {
+          if (!Array.isArray(prev)) {
+            return prev;
+          }
+          let updated = false;
+          const next = prev.map((item) => {
+            if (item.id === payload.product.id) {
+              updated = true;
+              return payload.product;
+            }
+            return item;
+          });
+          return updated ? next : next.concat(payload.product);
+        });
+
+        setSellerProductEdits((prev) => ({
+          ...prev,
+          [productId]: buildProductDraft(payload.product),
+        }));
+
+        setSellerProductsFeedback({ type: 'success', message: 'Product updated successfully.' });
+      }
+    } catch (error) {
+      setSellerProductsFeedback({ type: 'error', message: error.message });
+    } finally {
+      setSellerProductSaving((prev) => {
+        const next = { ...prev };
+        delete next[productId];
         return next;
       });
     }
@@ -1047,6 +1353,13 @@ const ordersFetchInFlight = useRef(false);
               </button>
               <button
                 type="button"
+                onClick={handleNavMyProducts}
+                className={isMyProductsView ? 'active' : ''}
+              >
+                My products
+              </button>
+              <button
+                type="button"
                 onClick={handleToggleAddProduct}
                 className={isAddProductVisible ? 'active' : ''}
               >
@@ -1173,6 +1486,147 @@ const ordersFetchInFlight = useRef(false);
           </section>
         ) : null}
 
+        {isSeller && isMyProductsView ? (
+          <section className="my-products-panel">
+            <header className="my-products-header">
+              <h2>My products</h2>
+              <div className="my-products-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => fetchSellerProducts(true)}
+                  disabled={isLoadingSellerProducts}
+                >
+                  {isLoadingSellerProducts ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+            </header>
+            {sellerProductsFeedback ? (
+              <p className={`orders-feedback ${sellerProductsFeedback.type}`}>
+                {sellerProductsFeedback.message}
+              </p>
+            ) : null}
+            {isLoadingSellerProducts ? (
+              <p className="orders-status">Loading products...</p>
+            ) : sellerProducts.length === 0 ? (
+              <p className="orders-status">You have not added any products yet.</p>
+            ) : (
+              <ul className="my-products-list">
+                {sellerProducts.map((product) => {
+                  const draft = sellerProductEdits[product.id] || buildProductDraft(product);
+                  const isSaving = Boolean(sellerProductSaving[product.id]);
+
+                  return (
+                    <li key={product.id} className="my-product-card">
+                      <div className="my-product-header">
+                        <h3>{product.name}</h3>
+                        <p className="my-product-id">ID: {product.id}</p>
+                      </div>
+                      <div className="my-product-grid">
+                        <label>
+                          <span>Name</span>
+                          <input
+                            type="text"
+                            value={draft.name}
+                            onChange={(event) =>
+                              handleSellerProductChange(product.id, 'name', event.target.value)
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                        <label>
+                          <span>Price</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={draft.price}
+                            onChange={(event) =>
+                              handleSellerProductChange(product.id, 'price', event.target.value)
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                        <label>
+                          <span>Stock</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={draft.stock}
+                            onChange={(event) =>
+                              handleSellerProductChange(product.id, 'stock', event.target.value)
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                        <label className="my-product-full">
+                          <span>Sizes (comma separated)</span>
+                          <input
+                            type="text"
+                            value={draft.sizeOptions}
+                            onChange={(event) =>
+                              handleSellerProductChange(
+                                product.id,
+                                'sizeOptions',
+                                event.target.value
+                              )
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                        <label className="my-product-full">
+                          <span>Image URL</span>
+                          <input
+                            type="url"
+                            value={draft.imageUrl}
+                            onChange={(event) =>
+                              handleSellerProductChange(product.id, 'imageUrl', event.target.value)
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                        <label className="my-product-full">
+                          <span>Description</span>
+                          <textarea
+                            rows={3}
+                            value={draft.description}
+                            onChange={(event) =>
+                              handleSellerProductChange(
+                                product.id,
+                                'description',
+                                event.target.value
+                              )
+                            }
+                            disabled={isSaving}
+                          />
+                        </label>
+                      </div>
+                      <div className="my-product-actions">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => handleResetSellerProduct(product.id)}
+                          disabled={isSaving}
+                        >
+                          Reset
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveSellerProduct(product.id)}
+                          disabled={isSaving}
+                        >
+                          {isSaving ? 'Saving...' : 'Save changes'}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        ) : null}
+
         {isOrdersView ? (
           <section className="orders-panel">
             {(() => {
@@ -1200,7 +1654,11 @@ const ordersFetchInFlight = useRef(false);
                       </button>
                     </div>
                   </header>
-                  {ordersError ? <p className="orders-feedback error">{ordersError}</p> : null}
+                  {ordersFeedback ? (
+                    <p className={`orders-feedback ${ordersFeedback.type}`}>
+                      {ordersFeedback.message}
+                    </p>
+                  ) : null}
                   {isLoadingOrders ? (
                     <p className="orders-status">{ordersLoadingLabel}</p>
                   ) : orders.length === 0 ? (
@@ -1209,6 +1667,8 @@ const ordersFetchInFlight = useRef(false);
                     <ul className="orders-list">
                       {orders.map((order) => {
                         const action = canManageOrders ? ORDER_STATUS_ACTIONS[order.status] : null;
+                        const canAcknowledge =
+                          !canManageOrders && order.status === ORDER_STATUS.SHIPPED;
                         const isUpdating = Boolean(orderUpdateStates[order.id]);
                         const productImage = order.product?.imageUrl || PLACEHOLDER_IMAGE;
                         const productName = order.product?.name || 'Product unavailable';
@@ -1277,6 +1737,15 @@ const ordersFetchInFlight = useRef(false);
                                   disabled={isUpdating}
                                 >
                                   {isUpdating ? 'Updating...' : action.label}
+                                </button>
+                              ) : canAcknowledge ? (
+                                <button
+                                  type="button"
+                                  className="order-receive"
+                                  onClick={() => handleConfirmOrderReceived(order.id)}
+                                  disabled={isUpdating}
+                                >
+                                  {isUpdating ? 'Sending...' : 'Mark as received'}
                                 </button>
                               ) : (
                                 <span className="order-status-final">{statusLabel}</span>
@@ -1626,7 +2095,3 @@ const ordersFetchInFlight = useRef(false);
 }
 
 export default App;
-
-
-
-
