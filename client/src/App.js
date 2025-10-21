@@ -115,18 +115,18 @@ function App() {
     imageUrl: '',
     description: '',
   });
-const [isCreatingProduct, setIsCreatingProduct] = useState(false);
-const [productFormFeedback, setProductFormFeedback] = useState(null);
-const [isAddProductVisible, setIsAddProductVisible] = useState(false);
-const [currentView, setCurrentView] = useState(VIEW.HOME);
-const [cartItems, setCartItems] = useState([]);
-const [checkoutPayload, setCheckoutPayload] = useState(null);
-const [checkoutStatus, setCheckoutStatus] = useState(null);
-const [detailNotice, setDetailNotice] = useState(null);
-const [checkoutForm, setCheckoutForm] = useState(() => ({ ...DEFAULT_CHECKOUT_FORM }));
-const [isPlacingOrder, setIsPlacingOrder] = useState(false);
-const [orders, setOrders] = useState([]);
-const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [productFormFeedback, setProductFormFeedback] = useState(null);
+  const [isAddProductVisible, setIsAddProductVisible] = useState(false);
+  const [currentView, setCurrentView] = useState(VIEW.HOME);
+  const [cartItems, setCartItems] = useState([]);
+  const [checkoutPayload, setCheckoutPayload] = useState(null);
+  const [checkoutStatus, setCheckoutStatus] = useState(null);
+  const [detailNotice, setDetailNotice] = useState(null);
+  const [checkoutForm, setCheckoutForm] = useState(() => ({ ...DEFAULT_CHECKOUT_FORM }));
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [orders, setOrders] = useState([]);
+  const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [ordersFeedback, setOrdersFeedback] = useState(null);
   const [orderUpdateStates, setOrderUpdateStates] = useState({});
   const [hasLoadedOrders, setHasLoadedOrders] = useState(false);
@@ -138,6 +138,11 @@ const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [sellerProductSaving, setSellerProductSaving] = useState({});
   const [hasLoadedSellerProducts, setHasLoadedSellerProducts] = useState(false);
   const sellerProductsFetchInFlight = useRef(false);
+  const [topSellerProducts, setTopSellerProducts] = useState([]);
+  const [isLoadingTopSellers, setIsLoadingTopSellers] = useState(false);
+  const [topSellerFeedback, setTopSellerFeedback] = useState(null);
+  const [hasLoadedTopSellers, setHasLoadedTopSellers] = useState(false);
+  const topSellerFetchInFlight = useRef(false);
 
   const isRegister = authMode === AUTH_MODE.REGISTER;
   const actionLabel = isRegister ? 'Register' : 'Login';
@@ -203,6 +208,49 @@ const [isLoadingOrders, setIsLoadingOrders] = useState(false);
         });
     },
     [hasLoadedOrders, isCustomer, isSeller, user?.id]
+  );
+
+  const fetchTopSellerProducts = useCallback(
+    (force = false) => {
+      if (!user) {
+        return;
+      }
+
+      if (!force && hasLoadedTopSellers) {
+        return;
+      }
+
+      if (topSellerFetchInFlight.current) {
+        return;
+      }
+
+      topSellerFetchInFlight.current = true;
+      setIsLoadingTopSellers(true);
+      setTopSellerFeedback(null);
+
+      fetch('/api/products/top')
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.message || 'Failed to load top products.');
+          }
+          return response.json();
+        })
+        .then((items) => {
+          setTopSellerProducts(Array.isArray(items) ? items : []);
+          setHasLoadedTopSellers(true);
+        })
+        .catch((error) => {
+          setTopSellerFeedback({ type: 'error', message: error.message });
+          setTopSellerProducts([]);
+          setHasLoadedTopSellers(false);
+        })
+        .finally(() => {
+          setIsLoadingTopSellers(false);
+          topSellerFetchInFlight.current = false;
+        });
+    },
+    [hasLoadedTopSellers, user]
   );
 
   const fetchSellerProducts = useCallback(
@@ -396,6 +444,11 @@ const [isLoadingOrders, setIsLoadingOrders] = useState(false);
     setHasLoadedOrders(false);
     ordersFetchInFlight.current = false;
     setDetailNotice(null);
+    setTopSellerProducts([]);
+    setIsLoadingTopSellers(false);
+    setTopSellerFeedback(null);
+    setHasLoadedTopSellers(false);
+    topSellerFetchInFlight.current = false;
     resetCheckoutFlow();
     setFormValues({ username: '', password: '', role: 'customer' });
     setAuthMode(AUTH_MODE.LOGIN);
@@ -484,6 +537,18 @@ const [isLoadingOrders, setIsLoadingOrders] = useState(false);
 
     fetchOrders();
   }, [currentView, fetchOrders, isCustomer, isSeller, user?.id]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    if (currentView !== VIEW.HOME || isAddProductVisible) {
+      return;
+    }
+
+    fetchTopSellerProducts();
+  }, [currentView, fetchTopSellerProducts, isAddProductVisible, user]);
 
   useEffect(() => {
     if (!isSeller || !user?.id) {
@@ -1939,53 +2004,112 @@ const [isLoadingOrders, setIsLoadingOrders] = useState(false);
         ) : null}
 
         {isHomeView && !isAddProductVisible ? (
-          isLoadingProducts ? (
-            <p className="product-status">Loading products...</p>
-          ) : productError ? (
-            <p className="product-status error">{productError}</p>
-          ) : filteredProducts.length === 0 ? (
-            <p className="product-status">No products match the current search.</p>
-          ) : (
-            <section className="product-grid">
-              {filteredProducts.map((product) => {
-                const stockCount =
-                  Number.isInteger(product.stock) && product.stock >= 0
-                    ? product.stock
-                    : Number.parseInt(product.stock ?? 0, 10) || 0;
-                const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+          <>
+            <section className="top-seller-section" aria-labelledby="top-seller-heading">
+              <header className="top-seller-header">
+                <div>
+                  <h2 id="top-seller-heading">Top Seller Product</h2>
+                  <p className="top-seller-subtitle">Top 5 products ranked by total items sold.</p>
+                </div>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => fetchTopSellerProducts(true)}
+                  disabled={isLoadingTopSellers}
+                >
+                  {isLoadingTopSellers ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </header>
+              {topSellerFeedback ? (
+                <p className={`top-seller-feedback ${topSellerFeedback.type}`}>
+                  {topSellerFeedback.message}
+                </p>
+              ) : null}
+              {isLoadingTopSellers ? (
+                <p className="top-seller-status">Loading top sellers...</p>
+              ) : topSellerProducts.length === 0 ? (
+                <p className="top-seller-status">
+                  No sales yet. Completed orders will appear here.
+                </p>
+              ) : (
+                <ol className="top-seller-list">
+                  {topSellerProducts.map((product, index) => {
+                    const totalSold = Number.isFinite(product.totalSold)
+                      ? product.totalSold
+                      : Number.parseInt(product.totalSold ?? 0, 10) || 0;
+                    const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
 
-                return (
-                  <article
-                    key={product.id}
-                    className="product-card"
-                    onClick={() => openProductDetail(product.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        openProductDetail(product.id);
-                      }
-                    }}
-                  >
-                    <figure>
-                      <img src={imageSrc} alt={product.name} loading="lazy" />
-                    </figure>
-                    <div className="product-info">
-                      <h3>{product.name}</h3>
-                      <p className="product-price">{formatCurrency(product.price)}</p>
-                      <p className={`product-stock ${stockCount > 0 ? '' : 'out'}`}>
-                        {stockCount > 0 ? `In stock: ${stockCount}` : 'Out of stock'}
-                      </p>
-                      {product.description ? (
-                        <p className="product-description">{product.description}</p>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
+                    return (
+                      <li key={product.id}>
+                        <button
+                          type="button"
+                          className="top-seller-card"
+                          onClick={() => openProductDetail(product.id)}
+                        >
+                          <span className="top-seller-rank">{index + 1}</span>
+                          <img src={imageSrc} alt="" aria-hidden="true" loading="lazy" />
+                          <div className="top-seller-info">
+                            <h3>{product.name}</h3>
+                            <p className="top-seller-price">{formatCurrency(product.price)}</p>
+                            <p className="top-seller-meta">
+                              Sold {totalSold} {totalSold === 1 ? 'item' : 'items'}
+                            </p>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
             </section>
-          )
+            {isLoadingProducts ? (
+              <p className="product-status">Loading products...</p>
+            ) : productError ? (
+              <p className="product-status error">{productError}</p>
+            ) : filteredProducts.length === 0 ? (
+              <p className="product-status">No products match the current search.</p>
+            ) : (
+              <section className="product-grid">
+                {filteredProducts.map((product) => {
+                  const stockCount =
+                    Number.isInteger(product.stock) && product.stock >= 0
+                      ? product.stock
+                      : Number.parseInt(product.stock ?? 0, 10) || 0;
+                  const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+
+                  return (
+                    <article
+                      key={product.id}
+                      className="product-card"
+                      onClick={() => openProductDetail(product.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          openProductDetail(product.id);
+                        }
+                      }}
+                    >
+                      <figure>
+                        <img src={imageSrc} alt={product.name} loading="lazy" />
+                      </figure>
+                      <div className="product-info">
+                        <h3>{product.name}</h3>
+                        <p className="product-price">{formatCurrency(product.price)}</p>
+                        <p className={`product-stock ${stockCount > 0 ? '' : 'out'}`}>
+                          {stockCount > 0 ? `In stock: ${stockCount}` : 'Out of stock'}
+                        </p>
+                        {product.description ? (
+                          <p className="product-description">{product.description}</p>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                })}
+              </section>
+            )}
+          </>
         ) : null}
       </main>
 

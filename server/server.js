@@ -96,6 +96,12 @@ function mapProductRow(row) {
     typeof row.price === 'number' ? row.price : Number.parseFloat(row.price ?? 0) || 0;
   const stockValue =
     Number.isInteger(row.stock) ? row.stock : Number.parseInt(row.stock, 10) || 0;
+  const totalSoldValue =
+    Number.isFinite(row.totalSold)
+      ? row.totalSold
+      : Number.isFinite(row.total_sold)
+        ? row.total_sold
+        : Number.parseInt(row.totalSold ?? row.total_sold ?? 0, 10) || 0;
 
   return {
     id: row.id,
@@ -106,6 +112,7 @@ function mapProductRow(row) {
     sizeOptions: parseSizeOptions(sizeSource),
     imageUrl: imageSource,
     description: row.description ?? null,
+    totalSold: totalSoldValue,
   };
 }
 
@@ -255,6 +262,33 @@ app.get('/api/products', async (req, res) => {
   } catch (error) {
     console.error('Products fetch error:', error);
     res.status(500).json({ message: 'Failed to load products.' });
+  }
+});
+
+app.get('/api/products/top', async (req, res) => {
+  try {
+    const products = await all(
+      `SELECT
+         p.id,
+         p.seller_id AS sellerId,
+         p.name,
+         p.price,
+         p.stock,
+         p.size_options AS sizeOptions,
+         p.image_url AS imageUrl,
+         p.description,
+         COALESCE(SUM(o.quantity), 0) AS totalSold
+       FROM products p
+       LEFT JOIN orders o ON o.product_id = p.id
+       GROUP BY p.id
+       ORDER BY totalSold DESC, p.created_at DESC
+       LIMIT 5`
+    );
+
+    res.json(products.map(mapProductRow));
+  } catch (error) {
+    console.error('Top products fetch error:', error);
+    res.status(500).json({ message: 'Failed to load top products.' });
   }
 });
 
