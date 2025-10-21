@@ -198,6 +198,7 @@ function mapOrderRow(row) {
     ? row.quantity
     : Number.parseInt(row.quantity ?? 0, 10) || 0;
   const customerSource = row.customerId ?? row.customer_id ?? null;
+  const phoneValue = row.buyerPhone ?? row.buyer_phone ?? null;
 
   return {
     id: row.id,
@@ -208,6 +209,7 @@ function mapOrderRow(row) {
     status: row.status,
     buyerName: row.buyerName ?? row.buyer_name ?? null,
     shippingAddress: row.shippingAddress ?? row.shipping_address ?? null,
+    buyerPhone: phoneValue,
     paymentMethod: row.paymentMethod ?? row.payment_method ?? null,
     createdAt: row.createdAt ?? row.created_at ?? null,
     updatedAt: row.updatedAt ?? row.updated_at ?? null,
@@ -630,6 +632,20 @@ app.post('/api/orders', async (req, res) => {
   const parsedCustomerId = Number.parseInt(customerUserIdRaw, 10);
   const customerIdGlobal =
     Number.isInteger(parsedCustomerId) && parsedCustomerId > 0 ? parsedCustomerId : null;
+  const customerName =
+    typeof customer.fullName === 'string' ? customer.fullName.trim() : '';
+  const customerAddress =
+    typeof customer.address === 'string' ? customer.address.trim() : '';
+  const customerPhone =
+    typeof customer.phone === 'string' ? customer.phone.trim() : '';
+  const customerPayment =
+    typeof customer.paymentMethod === 'string' ? customer.paymentMethod.trim() : null;
+
+  if (!customerName || !customerAddress || !customerPhone) {
+    return res
+      .status(400)
+      .json({ message: 'Customer name, phone number, and address are required.' });
+  }
 
   if (rawItems.length === 0) {
     return res.status(400).json({ message: 'At least one item is required.' });
@@ -695,17 +711,18 @@ app.post('/api/orders', async (req, res) => {
       }
 
       const orderInsert = await run(
-        `INSERT INTO orders (product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, payment_method)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orders (product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, buyer_phone, payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           product.id,
           product.sellerId || null,
           customerId,
           item.quantity,
           ORDER_STATUS.PENDING,
-          typeof customer.fullName === 'string' ? customer.fullName.trim() : null,
-          typeof customer.address === 'string' ? customer.address.trim() : null,
-          typeof customer.paymentMethod === 'string' ? customer.paymentMethod.trim() : null,
+          customerName,
+          customerAddress,
+          customerPhone,
+          customerPayment,
         ]
       );
 
@@ -718,6 +735,7 @@ app.post('/api/orders', async (req, res) => {
            o.quantity,
            o.status,
            o.buyer_name,
+           o.buyer_phone,
            o.shipping_address,
            o.payment_method,
            o.created_at,
@@ -786,6 +804,7 @@ app.get('/api/sellers/:sellerId/orders', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,
@@ -833,6 +852,7 @@ app.get('/api/users/:userId/orders', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,
@@ -879,6 +899,7 @@ app.post('/api/orders/:orderId/receive', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,
@@ -922,6 +943,7 @@ app.post('/api/orders/:orderId/receive', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,
@@ -971,6 +993,7 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,
@@ -1016,6 +1039,7 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
          o.quantity,
          o.status,
          o.buyer_name,
+         o.buyer_phone,
          o.shipping_address,
          o.payment_method,
          o.created_at,

@@ -15,6 +15,7 @@ const PLACEHOLDER_IMAGE = 'https://via.placeholder.com/400x300?text=No+Image';
 const DEFAULT_CHECKOUT_FORM = {
   fullName: '',
   address: '',
+  phone: '',
   paymentMethod: 'card',
 };
 const VIEW = {
@@ -144,17 +145,17 @@ function App() {
   const [hasLoadedTopSellers, setHasLoadedTopSellers] = useState(false);
   const topSellerFetchInFlight = useRef(false);
 
-  const revokeObjectUrl = (url) => {
+  const revokeObjectUrl = useCallback((url) => {
     if (url && url.startsWith('blob:')) {
       URL.revokeObjectURL(url);
     }
-  };
+  }, []);
 
-  const cleanupDraftPreview = (draft) => {
+  const cleanupDraftPreview = useCallback((draft) => {
     if (draft?.imagePreview && draft.imagePreview.startsWith('blob:')) {
       revokeObjectUrl(draft.imagePreview);
     }
-  };
+  }, [revokeObjectUrl]);
 
   const isRegister = authMode === AUTH_MODE.REGISTER;
   const actionLabel = isRegister ? 'Register' : 'Login';
@@ -329,7 +330,7 @@ function App() {
           sellerProductsFetchInFlight.current = false;
         });
     },
-    [hasLoadedSellerProducts, isSeller, user?.id]
+    [cleanupDraftPreview, hasLoadedSellerProducts, isSeller, user?.id]
   );
 
   useEffect(() => {
@@ -742,6 +743,9 @@ function App() {
         imagePreview: previewUrl,
       };
     });
+    if (event.target) {
+      event.target.value = '';
+    }
   };
 
   const resetNewProductForm = () => {
@@ -1015,8 +1019,15 @@ function App() {
       return;
     }
 
-    if (!checkoutForm.fullName.trim() || !checkoutForm.address.trim()) {
-      setCheckoutStatus({ type: 'error', message: 'Please fill in your name and address.' });
+    const fullNameValue = checkoutForm.fullName.trim();
+    const addressValue = checkoutForm.address.trim();
+    const phoneValue = checkoutForm.phone.trim();
+
+    if (!fullNameValue || !addressValue || !phoneValue) {
+      setCheckoutStatus({
+        type: 'error',
+        message: 'Please fill in your name, phone number, and address.',
+      });
       return;
     }
 
@@ -1033,8 +1044,9 @@ function App() {
             quantity: item.quantity,
           })),
           customer: {
-            fullName: checkoutForm.fullName.trim(),
-            address: checkoutForm.address.trim(),
+            fullName: fullNameValue,
+            address: addressValue,
+            phone: phoneValue,
             paymentMethod: checkoutForm.paymentMethod,
             userId: isCustomer ? user?.id ?? null : null,
           },
@@ -1739,14 +1751,14 @@ function App() {
                               <input
                                 type="file"
                                 accept="image/*"
-                                onChange={(event) =>
-                                  handleSellerProductImageChange(
-                                    product.id,
+                                onChange={(event) => {
+                                  const file =
                                     event.target.files && event.target.files[0]
                                       ? event.target.files[0]
-                                      : null
-                                  )
-                                }
+                                      : null;
+                                  handleSellerProductImageChange(product.id, file);
+                                  event.target.value = '';
+                                }}
                                 disabled={isSaving}
                               />
                               {draft.imageFile ? (
@@ -1896,9 +1908,19 @@ function App() {
                                   <strong>Buyer:</strong> {order.buyerName}
                                 </p>
                               ) : null}
+                              {order.buyerPhone ? (
+                                <p>
+                                  <strong>{canManageOrders ? 'Phone:' : 'Contact phone:'}</strong>{' '}
+                                  {order.buyerPhone}
+                                </p>
+                              ) : null}
                               {canManageOrders && order.shippingAddress ? (
                                 <p>
                                   <strong>Address:</strong> {order.shippingAddress}
+                                </p>
+                              ) : !canManageOrders && order.shippingAddress ? (
+                                <p>
+                                  <strong>Shipping to:</strong> {order.shippingAddress}
                                 </p>
                               ) : null}
                               <p>
@@ -2084,6 +2106,18 @@ function App() {
                       name="address"
                       rows={3}
                       value={checkoutForm.address}
+                      onChange={handleCheckoutFormChange}
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>Contact phone</span>
+                    <input
+                      type="tel"
+                      name="phone"
+                      inputMode="tel"
+                      placeholder="e.g. 089-123-4567"
+                      value={checkoutForm.phone}
                       onChange={handleCheckoutFormChange}
                       required
                     />

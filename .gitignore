@@ -1,0 +1,8 @@
+# Node dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Uploaded product images
+server/uploads/*
+!server/uploads/.gitignore

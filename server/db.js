@@ -94,6 +94,7 @@ async function createOrdersTable() {
       status TEXT NOT NULL DEFAULT 'pending',
       buyer_name TEXT,
       shipping_address TEXT,
+      buyer_phone TEXT,
       payment_method TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -115,6 +116,7 @@ async function migrateLegacyOrdersTableIfNeeded(columns) {
 
   const hasModernId = columns.some((column) => column.name === 'id');
   const hasCustomerId = columns.some((column) => column.name === 'customer_id');
+  const hasBuyerPhone = columns.some((column) => column.name === 'buyer_phone');
 
   if (!hasModernId) {
     const backupTable = `orders_backup_${Date.now()}`;
@@ -169,6 +171,12 @@ async function migrateLegacyOrdersTableIfNeeded(columns) {
         ? 'shippingAddress AS shipping_address'
         : 'NULL AS shipping_address';
 
+    const selectPhonePart = legacyNames.includes('buyer_phone')
+      ? 'buyer_phone'
+      : legacyNames.includes('buyerPhone')
+        ? 'buyerPhone AS buyer_phone'
+        : 'NULL AS buyer_phone';
+
     const selectPaymentPart = legacyNames.includes('payment_method')
       ? 'payment_method'
       : legacyNames.includes('paymentMethod')
@@ -196,13 +204,14 @@ async function migrateLegacyOrdersTableIfNeeded(columns) {
       selectStatusPart,
       selectBuyerNamePart,
       selectAddressPart,
+      selectPhonePart,
       selectPaymentPart,
       selectCreatedPart,
       selectUpdatedPart,
     ];
 
     await run(
-      `INSERT INTO orders (id, product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, payment_method, created_at, updated_at)
+      `INSERT INTO orders (id, product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, buyer_phone, payment_method, created_at, updated_at)
        SELECT ${selectParts.join(', ')}
        FROM ${backupTable}`
     );
@@ -213,6 +222,10 @@ async function migrateLegacyOrdersTableIfNeeded(columns) {
 
   if (!hasCustomerId) {
     await run('ALTER TABLE orders ADD COLUMN customer_id INTEGER');
+  }
+
+  if (!hasBuyerPhone) {
+    await run('ALTER TABLE orders ADD COLUMN buyer_phone TEXT');
   }
 }
 
