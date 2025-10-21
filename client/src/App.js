@@ -47,18 +47,25 @@ function buildProductDraft(product = {}) {
   return {
     name: product.name ?? '',
     price:
-      product.price !== undefined && product.price !== null
-        ? String(product.price)
-        : '',
+      product.price !== undefined && product.price !== null ? String(product.price) : '',
     stock:
-      product.stock !== undefined && product.stock !== null
-        ? String(product.stock)
-        : '',
+      product.stock !== undefined && product.stock !== null ? String(product.stock) : '',
     sizeOptions: Array.isArray(product.sizeOptions) ? product.sizeOptions.join(', ') : '',
-    imageUrl: product.imageUrl ?? '',
+    imageFile: null,
+    imagePreview: product.imageUrl ?? '',
     description: product.description ?? '',
   };
 }
+
+const EMPTY_PRODUCT_FORM = {
+  name: '',
+  price: '',
+  stock: '',
+  sizeOptions: '',
+  description: '',
+  imageFile: null,
+  imagePreview: '',
+};
 
 const ORDER_STATUS = {
   PENDING: 'pending',
@@ -107,14 +114,7 @@ function App() {
   });
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
-  const [newProductValues, setNewProductValues] = useState({
-    name: '',
-    price: '',
-    stock: '',
-    sizeOptions: '',
-    imageUrl: '',
-    description: '',
-  });
+  const [newProductValues, setNewProductValues] = useState({ ...EMPTY_PRODUCT_FORM });
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [productFormFeedback, setProductFormFeedback] = useState(null);
   const [isAddProductVisible, setIsAddProductVisible] = useState(false);
@@ -143,6 +143,18 @@ function App() {
   const [topSellerFeedback, setTopSellerFeedback] = useState(null);
   const [hasLoadedTopSellers, setHasLoadedTopSellers] = useState(false);
   const topSellerFetchInFlight = useRef(false);
+
+  const revokeObjectUrl = (url) => {
+    if (url && url.startsWith('blob:')) {
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const cleanupDraftPreview = (draft) => {
+    if (draft?.imagePreview && draft.imagePreview.startsWith('blob:')) {
+      revokeObjectUrl(draft.imagePreview);
+    }
+  };
 
   const isRegister = authMode === AUTH_MODE.REGISTER;
   const actionLabel = isRegister ? 'Register' : 'Login';
@@ -283,7 +295,7 @@ function App() {
           const list = Array.isArray(items) ? items : [];
           setSellerProducts(list);
           setSellerProductEdits((prev) => {
-            if (!force && Object.keys(prev || {}).length > 0) {
+            if (!force && prev && Object.keys(prev).length > 0) {
               const next = { ...prev };
               list.forEach((product) => {
                 if (!next[product.id]) {
@@ -292,12 +304,14 @@ function App() {
               });
               Object.keys(next).forEach((key) => {
                 if (!list.some((product) => String(product.id) === key)) {
+                  cleanupDraftPreview(next[key]);
                   delete next[key];
                 }
               });
               return next;
             }
 
+            Object.values(prev || {}).forEach((draft) => cleanupDraftPreview(draft));
             const mapping = {};
             list.forEach((product) => {
               mapping[product.id] = buildProductDraft(product);
@@ -410,6 +424,8 @@ function App() {
   };
 
   const handleLogout = () => {
+    cleanupDraftPreview(newProductValues);
+    Object.values(sellerProductEdits || {}).forEach((draft) => cleanupDraftPreview(draft));
     setUser(null);
     setProducts([]);
     setProductError(null);
@@ -417,14 +433,7 @@ function App() {
     setSelectedProduct(null);
     setDetailError(null);
     setDetailState({ size: '', amount: 1, isDescriptionOpen: true });
-    setNewProductValues({
-      name: '',
-      price: '',
-      stock: '',
-      sizeOptions: '',
-      imageUrl: '',
-      description: '',
-    });
+    setNewProductValues({ ...EMPTY_PRODUCT_FORM });
     setIsCreatingProduct(false);
     setProductFormFeedback(null);
     setIsAddProductVisible(false);
@@ -708,6 +717,7 @@ function App() {
       } else {
         setCurrentView(VIEW.MY_PRODUCTS);
         setSellerProductsFeedback(null);
+        resetNewProductForm();
       }
       return next;
     });
@@ -718,14 +728,26 @@ function App() {
     setNewProductValues((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleNewProductImageChange = (event) => {
+    const file = event.target.files && event.target.files[0] ? event.target.files[0] : null;
+    setNewProductValues((prev) => {
+      cleanupDraftPreview(prev);
+      if (!file) {
+        return { ...prev, imageFile: null, imagePreview: '' };
+      }
+      const previewUrl = URL.createObjectURL(file);
+      return {
+        ...prev,
+        imageFile: file,
+        imagePreview: previewUrl,
+      };
+    });
+  };
+
   const resetNewProductForm = () => {
-    setNewProductValues({
-      name: '',
-      price: '',
-      stock: '',
-      sizeOptions: '',
-      imageUrl: '',
-      description: '',
+    setNewProductValues((prev) => {
+      cleanupDraftPreview(prev);
+      return { ...EMPTY_PRODUCT_FORM };
     });
   };
 
@@ -767,25 +789,33 @@ function App() {
       .map((item) => item.trim())
       .filter(Boolean);
     const uniqueSizes = [...new Set(sizeList)];
-    const imageValue = newProductValues.imageUrl.trim();
     const descriptionValue = newProductValues.description.trim();
+
+    if (!newProductValues.imageFile) {
+      setProductFormFeedback({ type: 'error', message: 'Please select a product image.' });
+      return;
+    }
 
     setIsCreatingProduct(true);
     setProductFormFeedback(null);
 
     try {
+      const formData = new FormData();
+      formData.append('sellerId', user.id);
+      formData.append('name', nameValue);
+      formData.append('price', priceValue);
+      formData.append('stock', stockValue);
+      if (uniqueSizes.length > 0) {
+        formData.append('sizeOptions', uniqueSizes.join(','));
+      }
+      formData.append('image', newProductValues.imageFile);
+      if (descriptionValue) {
+        formData.append('description', descriptionValue);
+      }
+
       const response = await fetch('/api/products', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sellerId: user.id,
-          name: nameValue,
-          price: priceValue,
-          stock: stockValue,
-          sizeOptions: uniqueSizes,
-          imageUrl: imageValue || null,
-          description: descriptionValue || null,
-        }),
+        body: formData,
       });
 
       const payload = await response.json();
@@ -794,21 +824,25 @@ function App() {
         throw new Error(payload?.message || 'Failed to create product.');
       }
 
-        if (payload?.product) {
-          setProducts((prev) => [payload.product, ...(Array.isArray(prev) ? prev : [])]);
+      if (payload?.product) {
+        setProducts((prev) => [payload.product, ...(Array.isArray(prev) ? prev : [])]);
 
-          if (isSeller && user?.id === payload.product.sellerId) {
-            setSellerProducts((prev) => {
-              const list = Array.isArray(prev) ? prev : [];
-              const filtered = list.filter((item) => item.id !== payload.product.id);
-              return [payload.product, ...filtered];
-            });
-            setSellerProductEdits((prev) => ({
-              ...prev,
-              [payload.product.id]: buildProductDraft(payload.product),
-            }));
-          }
+        if (isSeller && user?.id === payload.product.sellerId) {
+          setSellerProducts((prev) => {
+            const list = Array.isArray(prev) ? prev : [];
+            const filtered = list.filter((item) => item.id !== payload.product.id);
+            return [payload.product, ...filtered];
+          });
+          setSellerProductEdits((prev) => {
+            const next = { ...prev };
+            if (next[payload.product.id]) {
+              cleanupDraftPreview(next[payload.product.id]);
+            }
+            next[payload.product.id] = buildProductDraft(payload.product);
+            return next;
+          });
         }
+      }
 
       setProductFormFeedback({
         type: 'success',
@@ -1162,10 +1196,36 @@ function App() {
     setSellerProductsFeedback(null);
     setSellerProductEdits((prev) => {
       const next = { ...prev };
-      const existingDraft = next[productId] ?? buildProductDraft(sellerProducts.find((item) => item.id === productId));
+      const existingDraft =
+        next[productId] ?? buildProductDraft(sellerProducts.find((item) => item.id === productId));
       next[productId] = {
         ...existingDraft,
         [field]: value,
+      };
+      return next;
+    });
+  };
+
+  const handleSellerProductImageChange = (productId, file) => {
+    setSellerProductsFeedback(null);
+    setSellerProductEdits((prev) => {
+      const next = { ...prev };
+      const product = sellerProducts.find((item) => item.id === productId);
+      const currentDraft = next[productId] ?? buildProductDraft(product);
+      cleanupDraftPreview(currentDraft);
+      if (!file) {
+        next[productId] = {
+          ...currentDraft,
+          imageFile: null,
+          imagePreview: product?.imageUrl ?? '',
+        };
+        return next;
+      }
+      const previewUrl = URL.createObjectURL(file);
+      next[productId] = {
+        ...currentDraft,
+        imageFile: file,
+        imagePreview: previewUrl,
       };
       return next;
     });
@@ -1177,10 +1237,14 @@ function App() {
       return;
     }
     setSellerProductsFeedback(null);
-    setSellerProductEdits((prev) => ({
-      ...prev,
-      [productId]: buildProductDraft(product),
-    }));
+    setSellerProductEdits((prev) => {
+      const next = { ...prev };
+      if (next[productId]) {
+        cleanupDraftPreview(next[productId]);
+      }
+      next[productId] = buildProductDraft(product);
+      return next;
+    });
   };
 
   const handleSaveSellerProduct = async (productId) => {
@@ -1218,23 +1282,27 @@ function App() {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
+    const uniqueSizes = [...new Set(sizeList)];
+    const descriptionValue = draft.description?.trim() || '';
 
     setSellerProductsFeedback(null);
     setSellerProductSaving((prev) => ({ ...prev, [productId]: true }));
 
     try {
+      const formData = new FormData();
+      formData.append('sellerId', user.id);
+      formData.append('name', trimmedName);
+      formData.append('price', parsedPrice);
+      formData.append('stock', parsedStock);
+      formData.append('sizeOptions', uniqueSizes.join(','));
+      formData.append('description', descriptionValue);
+      if (draft.imageFile) {
+        formData.append('image', draft.imageFile);
+      }
+
       const response = await fetch(`/api/products/${productId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sellerId: user.id,
-          name: trimmedName,
-          price: parsedPrice,
-          stock: parsedStock,
-          sizeOptions: sizeList,
-          imageUrl: draft.imageUrl?.trim() || null,
-          description: draft.description?.trim() || null,
-        }),
+        body: formData,
       });
 
       const payload = await response.json().catch(() => ({}));
@@ -1264,10 +1332,14 @@ function App() {
           return updated ? next : next.concat(payload.product);
         });
 
-        setSellerProductEdits((prev) => ({
-          ...prev,
-          [productId]: buildProductDraft(payload.product),
-        }));
+        setSellerProductEdits((prev) => {
+          const next = { ...prev };
+          if (next[productId]) {
+            cleanupDraftPreview(next[productId]);
+          }
+          next[productId] = buildProductDraft(payload.product);
+          return next;
+        });
 
         setSellerProductsFeedback({ type: 'success', message: 'Product updated successfully.' });
       }
@@ -1495,29 +1567,43 @@ function App() {
                 </label>
               </div>
               <div className="seller-form-row">
-                <label>
-                  <span>Sizes (optional)</span>
-                  <input
-                    type="text"
-                    name="sizeOptions"
+              <label>
+                <span>Sizes (optional)</span>
+                <input
+                  type="text"
+                  name="sizeOptions"
                     placeholder="Ex. S,M,L or leave blank"
                     value={newProductValues.sizeOptions}
                     onChange={handleNewProductChange}
-                    disabled={isCreatingProduct}
-                  />
-                </label>
-                <label>
-                  <span>Image URL (optional)</span>
-                  <input
-                    type="url"
-                    name="imageUrl"
-                    placeholder="https://example.com/image.jpg"
-                    value={newProductValues.imageUrl}
-                    onChange={handleNewProductChange}
-                    disabled={isCreatingProduct}
-                  />
-                </label>
-              </div>
+                  disabled={isCreatingProduct}
+                />
+              </label>
+              <label className="seller-image-field">
+                <span>Product image</span>
+                <div className="seller-image-upload">
+                  <div className="seller-image-preview">
+                    <img
+                      src={newProductValues.imagePreview || PLACEHOLDER_IMAGE}
+                      alt="Selected product preview"
+                    />
+                  </div>
+                  <div className="seller-image-actions">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleNewProductImageChange}
+                      disabled={isCreatingProduct}
+                      required
+                    />
+                    {newProductValues.imageFile ? (
+                      <p className="seller-image-name">{newProductValues.imageFile.name}</p>
+                    ) : (
+                      <p className="seller-image-name hint">Choose an image to upload</p>
+                    )}
+                  </div>
+                </div>
+              </label>
+            </div>
               <label className="seller-form-row">
                 <span>Description (optional)</span>
                 <textarea
@@ -1640,17 +1726,47 @@ function App() {
                             disabled={isSaving}
                           />
                         </label>
-                        <label className="my-product-full">
-                          <span>Image URL</span>
-                          <input
-                            type="url"
-                            value={draft.imageUrl}
-                            onChange={(event) =>
-                              handleSellerProductChange(product.id, 'imageUrl', event.target.value)
-                            }
-                            disabled={isSaving}
-                          />
-                        </label>
+                        <div className="my-product-full seller-image-field">
+                          <span>Product image</span>
+                          <div className="seller-image-upload">
+                            <div className="seller-image-preview">
+                              <img
+                                src={draft.imagePreview || product.imageUrl || PLACEHOLDER_IMAGE}
+                                alt={`${product.name} preview`}
+                              />
+                            </div>
+                            <div className="seller-image-actions">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(event) =>
+                                  handleSellerProductImageChange(
+                                    product.id,
+                                    event.target.files && event.target.files[0]
+                                      ? event.target.files[0]
+                                      : null
+                                  )
+                                }
+                                disabled={isSaving}
+                              />
+                              {draft.imageFile ? (
+                                <>
+                                  <p className="seller-image-name">{draft.imageFile.name}</p>
+                                  <button
+                                    type="button"
+                                    className="seller-image-clear"
+                                    onClick={() => handleSellerProductImageChange(product.id, null)}
+                                    disabled={isSaving}
+                                  >
+                                    Remove selected image
+                                  </button>
+                                </>
+                              ) : (
+                                <p className="seller-image-name hint">Current image will be kept</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                         <label className="my-product-full">
                           <span>Description</span>
                           <textarea

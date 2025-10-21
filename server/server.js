@@ -1,6 +1,9 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
 const { all, get, run, initialize, databaseFile } = require('./db');
 
 const app = express();
@@ -20,8 +23,78 @@ const ORDER_STATUS_FLOW = {
   [ORDER_STATUS.SHIPPED]: ORDER_STATUS.COMPLETED,
 };
 
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    cb(null, `${uniqueSuffix}${extension}`);
+  },
+});
+
+function imageFileFilter(req, file, cb) {
+  if (!file) {
+    cb(null, false);
+    return;
+  }
+
+  if (file.mimetype && file.mimetype.startsWith('image/')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed.'));
+  }
+}
+
+const upload = multer({
+  storage,
+  fileFilter: imageFileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max
+  },
+});
+
+function toPublicImagePath(filename) {
+  if (!filename) {
+    return null;
+  }
+  return `/uploads/${filename}`;
+}
+
+function removeImageFile(imagePath) {
+  if (!imagePath || typeof imagePath !== 'string') {
+    return;
+  }
+
+  const normalised = imagePath.startsWith('/uploads/')
+    ? imagePath.slice('/uploads/'.length)
+    : imagePath.startsWith('uploads/')
+      ? imagePath.slice('uploads/'.length)
+      : null;
+
+  if (!normalised) {
+    return;
+  }
+
+  const target = path.join(UPLOADS_DIR, normalised);
+
+  fs.promises
+    .unlink(target)
+    .catch((error) => {
+      if (error && error.code !== 'ENOENT') {
+        console.warn('Failed to remove image file:', error.message);
+      }
+    });
+}
+
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 function normaliseUsername(value = '') {
   return value.trim();
@@ -319,9 +392,9 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-app.post('/api/products', async (req, res) => {
+app.post('/api/products', upload.single('image'), async (req, res) => {
   try {
-    const { sellerId, name, price, stock, sizeOptions, imageUrl, description } = req.body || {};
+    const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
 
     const numericSellerId = Number.parseInt(sellerId, 10);
     if (!Number.isInteger(numericSellerId) || numericSellerId <= 0) {
@@ -354,8 +427,11 @@ app.post('/api/products', async (req, res) => {
     }
 
     const serializedSizes = serialiseSizeOptions(sizeOptions);
-    const normalisedImageUrl =
-      typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
+    if (!req.file) {
+      return res.status(400).json({ message: 'Product image is required.' });
+    }
+
+    const imagePath = toPublicImagePath(req.file.filename);
     const normalisedDescription =
       typeof description === 'string' && description.trim() ? description.trim() : null;
 
@@ -368,7 +444,7 @@ app.post('/api/products', async (req, res) => {
         priceValue,
         stockValue,
         serializedSizes,
-        normalisedImageUrl,
+        imagePath,
         normalisedDescription,
       ]
     );
@@ -386,6 +462,10 @@ app.post('/api/products', async (req, res) => {
       product: mapProductRow(product),
     });
   } catch (error) {
+    if (req.file) {
+      removeImageFile(toPublicImagePath(req.file.filename));
+    }
+
     console.error('Product creation error:', error);
     res.status(500).json({ message: 'Failed to create product.' });
   }
@@ -427,9 +507,9 @@ app.get('/api/sellers/:sellerId/products', async (req, res) => {
   }
 });
 
-app.patch('/api/products/:productId', async (req, res) => {
+app.patch('/api/products/:productId', upload.single('image'), async (req, res) => {
   const productId = Number.parseInt(req.params.productId, 10);
-  const { sellerId, name, price, stock, sizeOptions, imageUrl, description } = req.body || {};
+  const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
 
   if (!Number.isInteger(productId) || productId <= 0) {
     return res.status(400).json({ message: 'Invalid product id supplied.' });
@@ -493,11 +573,10 @@ app.patch('/api/products/:productId', async (req, res) => {
       params.push(serialisedSizes);
     }
 
-    if (imageUrl !== undefined) {
-      const cleanedImage =
-        typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
+    const newImagePath = req.file ? toPublicImagePath(req.file.filename) : null;
+    if (req.file) {
       updates.push('image_url = ?');
-      params.push(cleanedImage);
+      params.push(newImagePath);
     }
 
     if (description !== undefined) {
@@ -523,11 +602,19 @@ app.patch('/api/products/:productId', async (req, res) => {
       [productId]
     );
 
+    if (req.file && existing.imageUrl && existing.imageUrl !== updated.imageUrl) {
+      removeImageFile(existing.imageUrl);
+    }
+
     res.json({
       message: 'Product updated successfully.',
       product: mapProductRow(updated),
     });
   } catch (error) {
+    if (req.file) {
+      removeImageFile(toPublicImagePath(req.file.filename));
+    }
+
     console.error('Product update error:', error);
     res.status(500).json({ message: 'Failed to update product.' });
   }
@@ -1005,6 +1092,16 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error('Upload error:', err);
+    return res.status(400).json({ message: err.message });
+  }
+
+  if (err && err.message === 'Only image files are allowed.') {
+    console.error('Upload error:', err);
+    return res.status(400).json({ message: err.message });
+  }
+
   console.error('Unhandled error:', err);
   res.status(500).json({ message: 'Internal server error' });
 });

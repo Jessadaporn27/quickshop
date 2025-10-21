@@ -485,6 +485,98 @@ body {
   min-height: 120px;
 }
 
+.seller-image-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.seller-image-upload {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 1rem;
+  align-items: center;
+}
+
+.seller-image-preview {
+  width: 120px;
+  height: 120px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.seller-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.seller-image-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.seller-image-actions input[type='file'] {
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.seller-image-name {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.02rem;
+}
+
+.seller-image-name.hint {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.seller-image-clear {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: #ffdddd;
+  font-weight: 600;
+  letter-spacing: 0.03rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.seller-image-clear:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.my-products-panel .seller-image-preview {
+  background: rgba(23, 32, 66, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(23, 32, 66, 0.12);
+}
+
+.my-products-panel .seller-image-name {
+  color: var(--neutral-900);
+}
+
+.my-products-panel .seller-image-name.hint {
+  color: var(--neutral-600);
+}
+
+.my-products-panel .seller-image-clear {
+  color: #3559ff;
+}
+
 .seller-form-actions {
   display: flex;
   justify-content: flex-end;
