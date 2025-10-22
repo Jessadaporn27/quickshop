@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+Dockerfile
+.dockerignore
+server/uploads
+server/db.db
+client/.env
+client/node_modules
+client/build
+server/node_modules
