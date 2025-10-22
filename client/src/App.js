@@ -757,9 +757,6 @@ function App() {
         imagePreview: previewUrl,
       };
     });
-    if (event.target) {
-      event.target.value = '';
-    }
   };
 
   const resetNewProductForm = () => {
