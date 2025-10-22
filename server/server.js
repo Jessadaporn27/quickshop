@@ -1139,7 +1139,10 @@ app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ message: 'Internal server error' });
 });
-
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
 initialize()
   .then(() => {
     app.listen(PORT, () => {
