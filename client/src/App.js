@@ -1,6 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
+const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
+
+const resolveApiUrl = (path) => {
+  if (!API_BASE_URL) {
+    return path;
+  }
+
+  if (!path.startsWith('/')) {
+    return `${API_BASE_URL}/${path}`;
+  }
+
+  return `${API_BASE_URL}${path}`;
+};
+
 const AUTH_MODE = {
   LOGIN: 'login',
   REGISTER: 'register',
@@ -199,7 +213,7 @@ function App() {
         ? `/api/sellers/${user.id}/orders`
         : `/api/users/${user.id}/orders`;
 
-      fetch(endpoint)
+      fetch(resolveApiUrl(endpoint))
         .then(async (response) => {
           if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
@@ -241,7 +255,7 @@ function App() {
       setIsLoadingTopSellers(true);
       setTopSellerFeedback(null);
 
-      fetch('/api/products/top')
+      fetch(resolveApiUrl('/api/products/top'))
         .then(async (response) => {
           if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
@@ -284,7 +298,7 @@ function App() {
       setIsLoadingSellerProducts(true);
       setSellerProductsFeedback(null);
 
-      fetch(`/api/sellers/${user.id}/products`)
+      fetch(resolveApiUrl(`/api/sellers/${user.id}/products`))
         .then(async (response) => {
           if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
@@ -379,7 +393,7 @@ function App() {
         payload.role = formValues.role;
       }
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(resolveApiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -471,7 +485,7 @@ function App() {
     setDetailState({ size: '', amount: 1, isDescriptionOpen: true });
     setIsLoadingDetail(true);
 
-    fetch(`/api/products/${productId}`)
+    fetch(resolveApiUrl(`/api/products/${productId}`))
       .then(async (response) => {
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
@@ -507,7 +521,7 @@ function App() {
     setIsLoadingProducts(true);
     setProductError(null);
 
-    fetch('/api/products')
+    fetch(resolveApiUrl('/api/products'))
       .then(async (response) => {
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
@@ -817,7 +831,7 @@ function App() {
         formData.append('description', descriptionValue);
       }
 
-      const response = await fetch('/api/products', {
+      const response = await fetch(resolveApiUrl('/api/products'), {
         method: 'POST',
         body: formData,
       });
@@ -1035,7 +1049,7 @@ function App() {
     setCheckoutStatus({ type: 'info', message: 'Processing payment...' });
 
     try {
-      const response = await fetch('/api/orders', {
+      const response = await fetch(resolveApiUrl('/api/orders'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1131,7 +1145,7 @@ function App() {
     setOrdersFeedback(null);
 
     try {
-      const response = await fetch(`/api/orders/${orderId}/status`, {
+      const response = await fetch(resolveApiUrl(`/api/orders/${orderId}/status`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: config.next }),
@@ -1171,7 +1185,7 @@ function App() {
     setOrdersFeedback(null);
 
     try {
-      const response = await fetch(`/api/orders/${orderId}/receive`, {
+      const response = await fetch(resolveApiUrl(`/api/orders/${orderId}/receive`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customerId: user.id }),
@@ -1312,7 +1326,7 @@ function App() {
         formData.append('image', draft.imageFile);
       }
 
-      const response = await fetch(`/api/products/${productId}`, {
+      const response = await fetch(resolveApiUrl(`/api/products/${productId}`), {
         method: 'PATCH',
         body: formData,
       });

@@ -84,11 +84,41 @@ function deriveConnectionInfo(config) {
 const poolConfig = buildPoolConfig();
 const connectionInfo = deriveConnectionInfo(poolConfig);
 
-const pool = new Pool(poolConfig);
+function createPool(config) {
+  const created = new Pool(config);
 
-pool.on('error', (error) => {
-  console.error('Unexpected PostgreSQL error on idle client:', error);
-});
+  created.on('error', (error) => {
+    console.error('Unexpected PostgreSQL error on idle client:', error);
+  });
+
+  return created;
+}
+
+function buildConfigForDatabase(config, database) {
+  if (!database) {
+    return { ...config };
+  }
+
+  if (config.connectionString) {
+    try {
+      const url = new URL(config.connectionString);
+      url.pathname = `/${database}`;
+      return {
+        connectionString: url.toString(),
+        ssl: config.ssl,
+      };
+    } catch (error) {
+      console.warn('Failed to derive connection string for database:', error.message);
+    }
+  }
+
+  return {
+    ...config,
+    database,
+  };
+}
+
+let pool = createPool(poolConfig);
 
 function prepareQuery(sql, params) {
   if (!params || params.length === 0) {
@@ -135,6 +165,47 @@ async function all(sql, params = []) {
   const query = prepareQuery(sql, params);
   const result = await pool.query(query.text, query.values);
   return result.rows;
+}
+
+function quoteIdentifier(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+async function ensureDatabaseExists() {
+  const targetDatabase = connectionInfo.database;
+  if (!targetDatabase) {
+    return;
+  }
+
+  try {
+    await pool.query('SELECT 1');
+    return;
+  } catch (error) {
+    if (error?.code !== '3D000') {
+      throw error;
+    }
+  }
+
+  const adminDatabase = process.env.DB_ADMIN_DATABASE || 'postgres';
+  const adminConfig = buildConfigForDatabase(poolConfig, adminDatabase);
+  const adminPool = createPool(adminConfig);
+
+  try {
+    const existsResult = await adminPool.query(
+      'SELECT 1 FROM pg_database WHERE datname = $1',
+      [targetDatabase]
+    );
+
+    if (existsResult.rowCount === 0) {
+      await adminPool.query(`CREATE DATABASE ${quoteIdentifier(targetDatabase)}`);
+      console.log(`Created PostgreSQL database '${targetDatabase}'.`);
+    }
+  } finally {
+    await adminPool.end().catch(() => {});
+  }
+
+  await pool.end().catch(() => {});
+  pool = createPool(poolConfig);
 }
 
 async function createUsersTable() {
@@ -300,7 +371,7 @@ async function seedProductsIfEmpty() {
 }
 
 async function initialize() {
-  await run('SELECT 1');
+  await ensureDatabaseExists();
   await createUsersTable();
   await createProductsTable();
   await createOrdersTable();
