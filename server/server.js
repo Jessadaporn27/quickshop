@@ -4,7 +4,7 @@ const fs = require('fs');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
-const { all, get, run, initialize, databaseFile } = require('./db');
+const { all, get, run, initialize, connectionInfo } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -273,7 +273,7 @@ app.post('/api/auth/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const result = await run(
-      'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
+      'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?) RETURNING id',
       [normalisedUsername, normalisedEmail, passwordHash, normalisedRole || 'customer']
     );
 
@@ -439,7 +439,8 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
 
     const result = await run(
       `INSERT INTO products (seller_id, name, price, stock, size_options, image_url, description)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       RETURNING id`,
       [
         numericSellerId,
         trimmedName,
@@ -712,7 +713,8 @@ app.post('/api/orders', async (req, res) => {
 
       const orderInsert = await run(
         `INSERT INTO orders (product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, buyer_phone, payment_method)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING id`,
         [
           product.id,
           product.sellerId || null,
@@ -1069,13 +1071,23 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
 app.get('/api/health', async (req, res) => {
   try {
     const tables = await all(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_name`
     );
 
     res.json({
       status: 'ok',
-      database: databaseFile,
-      tables: tables.map((row) => row.name),
+      database: {
+        host: connectionInfo.host,
+        database: connectionInfo.database,
+        port: connectionInfo.port,
+        user: connectionInfo.user,
+        ssl: connectionInfo.ssl,
+      },
+      tables: tables.map((row) => row.table_name),
     });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
@@ -1090,12 +1102,10 @@ app.get('/api/table/:tableName', async (req, res) => {
   }
 
   try {
-    const tableExists = await get(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-      [tableName]
-    );
+    const regName = `public.${tableName}`;
+    const tableExists = await get('SELECT to_regclass($1) AS oid', [regName]);
 
-    if (!tableExists) {
+    if (!tableExists?.oid) {
       return res.status(404).json({ message: `Table '${tableName}' not found.` });
     }
 

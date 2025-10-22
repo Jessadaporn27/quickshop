@@ -1,257 +1,219 @@
-const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+const { URL } = require('url');
+const { Pool } = require('pg');
 
-const databaseFile = process.env.SQLITE_FILE || path.join(__dirname, 'db.db');
-
-const db = new sqlite3.Database(databaseFile, (err) => {
-  if (err) {
-    console.error('Failed to connect to SQLite database:', err.message);
-  } else {
-    console.log(`Connected to SQLite database at ${databaseFile}`);
+function parseBoolean(value) {
+  if (value === undefined || value === null) {
+    return undefined;
   }
+
+  const normalised = String(value).trim().toLowerCase();
+  if (!normalised) {
+    return undefined;
+  }
+
+  return ['1', 'true', 'yes', 'on', 'require'].includes(normalised);
+}
+
+function buildPoolConfig() {
+  const config = {};
+
+  if (process.env.DATABASE_URL) {
+    config.connectionString = process.env.DATABASE_URL;
+  }
+
+  if (process.env.DB_HOST) {
+    config.host = process.env.DB_HOST;
+  }
+
+  if (process.env.DB_PORT) {
+    const port = Number(process.env.DB_PORT);
+    if (!Number.isNaN(port)) {
+      config.port = port;
+    }
+  }
+
+  if (process.env.DB_NAME) {
+    config.database = process.env.DB_NAME;
+  }
+
+  if (process.env.DB_USER) {
+    config.user = process.env.DB_USER;
+  }
+
+  if (process.env.DB_PASSWORD) {
+    config.password = process.env.DB_PASSWORD;
+  }
+
+  const shouldEnableSsl = parseBoolean(process.env.DB_SSL);
+  if (shouldEnableSsl) {
+    config.ssl = {
+      rejectUnauthorized: parseBoolean(process.env.DB_SSL_STRICT) ?? false,
+    };
+  }
+
+  return config;
+}
+
+function deriveConnectionInfo(config) {
+  if (config.connectionString) {
+    try {
+      const url = new URL(config.connectionString);
+      return {
+        host: url.hostname || null,
+        database: url.pathname ? url.pathname.slice(1) : null,
+        port: url.port ? Number(url.port) : null,
+        user: url.username || null,
+        ssl: url.searchParams.get('sslmode')
+          ? url.searchParams.get('sslmode').toLowerCase() !== 'disable'
+          : Boolean(config.ssl),
+      };
+    } catch (error) {
+      console.warn('Failed to parse DATABASE_URL:', error.message);
+    }
+  }
+
+  return {
+    host: config.host ?? null,
+    database: config.database ?? null,
+    port: config.port ?? null,
+    user: config.user ?? null,
+    ssl: Boolean(config.ssl),
+  };
+}
+
+const poolConfig = buildPoolConfig();
+const connectionInfo = deriveConnectionInfo(poolConfig);
+
+const pool = new Pool(poolConfig);
+
+pool.on('error', (error) => {
+  console.error('Unexpected PostgreSQL error on idle client:', error);
 });
 
-db.configure('busyTimeout', 5000);
+function prepareQuery(sql, params) {
+  if (!params || params.length === 0) {
+    return { text: sql, values: [] };
+  }
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({ changes: this.changes, lastID: this.lastID });
-      }
-    });
+  let index = 0;
+  const text = sql.replace(/\?/g, () => {
+    index += 1;
+    return `$${index}`;
   });
+
+  return { text, values: params };
 }
 
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(row);
-      }
-    });
-  });
+async function run(sql, params = []) {
+  const query = prepareQuery(sql, params);
+  const result = await pool.query(query.text, query.values);
+
+  const rows = result?.rows ?? [];
+  const firstRow = rows[0] ?? null;
+  const lastID =
+    firstRow && typeof firstRow.id !== 'undefined'
+      ? Number.parseInt(firstRow.id, 10) || firstRow.id
+      : null;
+
+  const rowCount = typeof result.rowCount === 'number' ? result.rowCount : 0;
+
+  return {
+    rowCount,
+    changes: rowCount,
+    rows,
+    lastID,
+  };
 }
 
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+async function get(sql, params = []) {
+  const query = prepareQuery(sql, params);
+  const result = await pool.query(query.text, query.values);
+  return result.rows[0] ?? null;
+}
+
+async function all(sql, params = []) {
+  const query = prepareQuery(sql, params);
+  const result = await pool.query(query.text, query.values);
+  return result.rows;
 }
 
 async function createUsersTable() {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+  await run(
+    `CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       email TEXT UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'customer',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
-
-  await run(sql);
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
 }
 
 async function createProductsTable() {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS products (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      seller_id INTEGER,
+  await run(
+    `CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      seller_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
-      price REAL NOT NULL DEFAULT 0,
+      price NUMERIC(10, 2) NOT NULL DEFAULT 0,
       stock INTEGER NOT NULL DEFAULT 0,
       size_options TEXT,
       image_url TEXT,
       description TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE SET NULL
-    )
-  `;
-
-  await run(sql);
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
 }
 
 async function createOrdersTable() {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS orders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      seller_id INTEGER NOT NULL,
-      customer_id INTEGER,
+  await run(
+    `CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      customer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       quantity INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'pending',
       buyer_name TEXT,
       shipping_address TEXT,
       buyer_phone TEXT,
       payment_method TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
-      FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE SET NULL
-    )
-  `;
-
-  await run(sql);
-}
-
-async function migrateLegacyOrdersTableIfNeeded(columns) {
-  if (!columns || columns.length === 0) {
-    return;
-  }
-
-  await run('DROP TRIGGER IF EXISTS orders_updated_at_trigger');
-
-  const hasModernId = columns.some((column) => column.name === 'id');
-  const hasCustomerId = columns.some((column) => column.name === 'customer_id');
-  const hasBuyerPhone = columns.some((column) => column.name === 'buyer_phone');
-
-  if (!hasModernId) {
-    const backupTable = `orders_backup_${Date.now()}`;
-
-    await run(`ALTER TABLE orders RENAME TO ${backupTable}`);
-    await createOrdersTable();
-
-    const legacyColumns = await all(`PRAGMA table_info(${backupTable})`);
-    const legacyNames = legacyColumns.map((column) => column.name);
-
-    const selectIdPart = legacyNames.includes('id')
-      ? 'id'
-      : legacyNames.includes('order_id')
-        ? 'order_id AS id'
-        : 'NULL AS id';
-
-    const selectProductPart = legacyNames.includes('product_id')
-      ? 'product_id'
-      : legacyNames.includes('productId')
-        ? 'productId AS product_id'
-        : 'NULL AS product_id';
-
-    const selectSellerPart = legacyNames.includes('seller_id')
-      ? 'seller_id'
-      : legacyNames.includes('sellerId')
-        ? 'sellerId AS seller_id'
-        : 'NULL AS seller_id';
-
-    const selectCustomerPart = legacyNames.includes('customer_id')
-      ? 'customer_id'
-      : legacyNames.includes('customerId')
-        ? 'customerId AS customer_id'
-        : 'NULL AS customer_id';
-
-    const selectQuantityPart = legacyNames.includes('quantity')
-      ? 'quantity'
-      : '1 AS quantity';
-
-    const selectStatusPart = legacyNames.includes('status')
-      ? 'status'
-      : `'pending' AS status`;
-
-    const selectBuyerNamePart = legacyNames.includes('buyer_name')
-      ? 'buyer_name'
-      : legacyNames.includes('buyerName')
-        ? 'buyerName AS buyer_name'
-        : 'NULL AS buyer_name';
-
-    const selectAddressPart = legacyNames.includes('shipping_address')
-      ? 'shipping_address'
-      : legacyNames.includes('shippingAddress')
-        ? 'shippingAddress AS shipping_address'
-        : 'NULL AS shipping_address';
-
-    const selectPhonePart = legacyNames.includes('buyer_phone')
-      ? 'buyer_phone'
-      : legacyNames.includes('buyerPhone')
-        ? 'buyerPhone AS buyer_phone'
-        : 'NULL AS buyer_phone';
-
-    const selectPaymentPart = legacyNames.includes('payment_method')
-      ? 'payment_method'
-      : legacyNames.includes('paymentMethod')
-        ? 'paymentMethod AS payment_method'
-        : 'NULL AS payment_method';
-
-    const selectCreatedPart = legacyNames.includes('created_at')
-      ? 'created_at'
-      : legacyNames.includes('createdAt')
-        ? 'createdAt AS created_at'
-        : 'CURRENT_TIMESTAMP AS created_at';
-
-    const selectUpdatedPart = legacyNames.includes('updated_at')
-      ? 'updated_at'
-      : legacyNames.includes('updatedAt')
-        ? 'updatedAt AS updated_at'
-        : 'CURRENT_TIMESTAMP AS updated_at';
-
-    const selectParts = [
-      selectIdPart,
-      selectProductPart,
-      selectSellerPart,
-      selectCustomerPart,
-      selectQuantityPart,
-      selectStatusPart,
-      selectBuyerNamePart,
-      selectAddressPart,
-      selectPhonePart,
-      selectPaymentPart,
-      selectCreatedPart,
-      selectUpdatedPart,
-    ];
-
-    await run(
-      `INSERT INTO orders (id, product_id, seller_id, customer_id, quantity, status, buyer_name, shipping_address, buyer_phone, payment_method, created_at, updated_at)
-       SELECT ${selectParts.join(', ')}
-       FROM ${backupTable}`
-    );
-
-    await run(`DROP TABLE ${backupTable}`);
-    return;
-  }
-
-  if (!hasCustomerId) {
-    await run('ALTER TABLE orders ADD COLUMN customer_id INTEGER');
-  }
-
-  if (!hasBuyerPhone) {
-    await run('ALTER TABLE orders ADD COLUMN buyer_phone TEXT');
-  }
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
 }
 
 async function ensureOrdersUpdatedAtTrigger() {
-  const columns = await all('PRAGMA table_info(orders)');
-  const hasId = columns.some((column) => column.name === 'id');
-  const hasUpdatedAt = columns.some((column) => column.name === 'updated_at');
-
-  await run('DROP TRIGGER IF EXISTS orders_updated_at_trigger');
-
-  if (!hasId || !hasUpdatedAt) {
-    return;
-  }
+  await run(
+    `CREATE OR REPLACE FUNCTION set_orders_updated_at()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       NEW.updated_at = NOW();
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql;`
+  );
 
   await run(
-    `CREATE TRIGGER orders_updated_at_trigger
-     AFTER UPDATE ON orders
-     FOR EACH ROW
+    `DO $$
      BEGIN
-       UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-     END`
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_trigger WHERE tgname = 'orders_updated_at_trigger'
+       ) THEN
+         CREATE TRIGGER orders_updated_at_trigger
+         BEFORE UPDATE ON orders
+         FOR EACH ROW
+         EXECUTE FUNCTION set_orders_updated_at();
+       END IF;
+     END;
+     $$;`
   );
 }
 
 async function seedProductsIfEmpty() {
-  const countRow = await get('SELECT COUNT(*) AS total FROM products');
+  const countRow = await get('SELECT COUNT(*)::INTEGER AS total FROM products');
 
   if (countRow?.total && countRow.total > 0) {
     return;
@@ -316,13 +278,14 @@ async function seedProductsIfEmpty() {
 
   const insertSql = `
     INSERT INTO products (seller_id, name, price, stock, size_options, image_url, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
   `;
 
   for (const product of seedData) {
-    const sizeOptions = Array.isArray(product.sizeOptions) && product.sizeOptions.length > 0
-      ? JSON.stringify(product.sizeOptions)
-      : null;
+    const sizeOptions =
+      Array.isArray(product.sizeOptions) && product.sizeOptions.length > 0
+        ? JSON.stringify(product.sizeOptions)
+        : null;
 
     await run(insertSql, [
       null,
@@ -336,121 +299,30 @@ async function seedProductsIfEmpty() {
   }
 }
 
-async function migrateLegacyUsersTableIfNeeded(columns) {
-  const hasModernId = columns.some((column) => column.name === 'id');
-  const hasLegacyUserId = columns.some((column) => column.name === 'user_id');
-
-  if (hasModernId || !hasLegacyUserId) {
-    return;
-  }
-
-  const backupTable = `users_backup_${Date.now()}`;
-
-  await run(`ALTER TABLE users RENAME TO ${backupTable}`);
-  await createUsersTable();
-
-  await run(
-    `INSERT INTO users (id, username, email, password_hash, role, created_at)
-     SELECT user_id, username, email, password_hash, COALESCE(role, 'customer'), COALESCE(created_at, CURRENT_TIMESTAMP)
-     FROM ${backupTable}`
-  );
-
-  await run(`DROP TABLE ${backupTable}`);
-}
-
-async function migrateLegacyProductsTableIfNeeded(columns) {
-  const hasModernId = columns.some((column) => column.name === 'id');
-  const hasLegacyProductId = columns.some((column) => column.name === 'product_id');
-  const sellerColumn = columns.find((column) => column.name === 'seller_id');
-  const sellerNotNullable = sellerColumn && sellerColumn.notnull !== 0;
-  const hasStock = columns.some((column) => column.name === 'stock');
-  const hasSizeOptions = columns.some((column) => column.name === 'size_options');
-
-  if (hasModernId && !hasLegacyProductId && !sellerNotNullable && hasStock && hasSizeOptions) {
-    return;
-  }
-
-  const backupTable = `products_backup_${Date.now()}`;
-
-  await run(`ALTER TABLE products RENAME TO ${backupTable}`);
-  await createProductsTable();
-
-  const legacyColumns = await all(`PRAGMA table_info(${backupTable})`);
-  const legacyNames = legacyColumns.map((column) => column.name);
-
-  const selectIdPart = legacyNames.includes('id')
-    ? 'id'
-    : legacyNames.includes('product_id')
-      ? 'product_id AS id'
-      : 'NULL AS id';
-
-  const selectSellerPart = legacyNames.includes('seller_id') ? 'seller_id' : 'NULL AS seller_id';
-  const selectNamePart = legacyNames.includes('name') ? 'name' : "'' AS name";
-  const selectPricePart = legacyNames.includes('price') ? 'price' : '0 AS price';
-  const selectStockPart = legacyNames.includes('stock') ? 'stock' : '0 AS stock';
-  const selectSizeOptionsPart = legacyNames.includes('size_options')
-    ? 'size_options'
-    : 'NULL AS size_options';
-  const selectImagePart = legacyNames.includes('image_url') ? 'image_url' : 'NULL AS image_url';
-  const selectDescriptionPart = legacyNames.includes('description') ? 'description' : 'NULL AS description';
-  const selectCreatedAtPart = legacyNames.includes('created_at')
-    ? 'created_at'
-    : 'CURRENT_TIMESTAMP AS created_at';
-
-  const selectParts = [
-    selectIdPart,
-    selectSellerPart,
-    selectNamePart,
-    selectPricePart,
-    selectStockPart,
-    selectSizeOptionsPart,
-    selectImagePart,
-    selectDescriptionPart,
-    selectCreatedAtPart,
-  ];
-
-  await run(
-    `INSERT INTO products (id, seller_id, name, price, stock, size_options, image_url, description, created_at)
-     SELECT ${selectParts.join(', ')}
-     FROM ${backupTable}`
-  );
-
-  await run(`DROP TABLE ${backupTable}`);
-}
-
 async function initialize() {
+  await run('SELECT 1');
   await createUsersTable();
   await createProductsTable();
   await createOrdersTable();
-
-  const userColumns = await all('PRAGMA table_info(users)');
-  await migrateLegacyUsersTableIfNeeded(userColumns);
-
-  const productColumns = await all('PRAGMA table_info(products)');
-  await migrateLegacyProductsTableIfNeeded(productColumns);
-
-  const orderColumns = await all('PRAGMA table_info(orders)');
-  await migrateLegacyOrdersTableIfNeeded(orderColumns);
   await ensureOrdersUpdatedAtTrigger();
-
   await seedProductsIfEmpty();
 }
 
-process.on('SIGINT', () => {
-  db.close((err) => {
-    if (err) {
-      console.error('Error closing SQLite connection:', err.message);
-    }
-    process.exit(err ? 1 : 0);
-  });
+process.on('SIGINT', async () => {
+  try {
+    await pool.end();
+    process.exit(0);
+  } catch (error) {
+    console.error('Error closing PostgreSQL pool:', error.message);
+    process.exit(1);
+  }
 });
 
 module.exports = {
-  db,
+  pool,
   run,
   get,
   all,
   initialize,
-  databaseFile,
+  connectionInfo,
 };
-
