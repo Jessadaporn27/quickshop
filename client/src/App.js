@@ -15,6 +15,19 @@ const resolveApiUrl = (path) => {
   return `${API_BASE_URL}${path}`;
 };
 
+const formatProductImageUrl = (value) => {
+  if (!value) {
+    return null;
+  }
+  if (/^(blob:|data:|http:\/\/|https:\/\/)/i.test(value)) {
+    return value;
+  }
+  if (!API_BASE_URL) {
+    return value;
+  }
+  return `${API_BASE_URL}${value.startsWith('/') ? value : `/${value}`}`;
+};
+
 const AUTH_MODE = {
   LOGIN: 'login',
   REGISTER: 'register',
@@ -909,7 +922,7 @@ function App() {
       price: selectedProduct.price,
       quantity: detailState.amount,
       size: sizeValue || null,
-      imageUrl: selectedProduct.imageUrl || PLACEHOLDER_IMAGE,
+      imageUrl: selectedProduct.imageUrl || null,
       stock: detailMetadata.stockCount,
     };
 
@@ -961,7 +974,7 @@ function App() {
       price: selectedProduct.price,
       quantity: detailState.amount,
       size: sizeValue || null,
-      imageUrl: selectedProduct.imageUrl || PLACEHOLDER_IMAGE,
+      imageUrl: selectedProduct.imageUrl || null,
       stock: detailMetadata.stockCount,
     };
 
@@ -1751,10 +1764,14 @@ function App() {
                         </label>
                         <div className="my-product-full seller-image-field">
                           <span>Product image</span>
-                          <div className="seller-image-upload">
+                            <div className="seller-image-upload">
                             <div className="seller-image-preview">
                               <img
-                                src={draft.imagePreview || product.imageUrl || PLACEHOLDER_IMAGE}
+                                src={
+                                  draft.imagePreview ||
+                                  formatProductImageUrl(product.imageUrl) ||
+                                  PLACEHOLDER_IMAGE
+                                }
                                 alt={`${product.name} preview`}
                               />
                             </div>
@@ -1763,12 +1780,12 @@ function App() {
                                 type="file"
                                 accept="image/*"
                                 onChange={(event) => {
-                                  const file =
-                                    event.target.files && event.target.files[0]
-                                      ? event.target.files[0]
-                                      : null;
-                                  handleSellerProductImageChange(product.id, file);
-                                  event.target.value = '';
+                              const file =
+                                event.target.files && event.target.files[0]
+                                  ? event.target.files[0]
+                                  : null;
+                              handleSellerProductImageChange(product.id, file);
+                              event.target.value = '';
                                 }}
                                 disabled={isSaving}
                               />
@@ -1874,7 +1891,7 @@ function App() {
                         const canAcknowledge =
                           !canManageOrders && order.status === ORDER_STATUS.SHIPPED;
                         const isUpdating = Boolean(orderUpdateStates[order.id]);
-                        const productImage = order.product?.imageUrl || PLACEHOLDER_IMAGE;
+    const productImage = formatProductImageUrl(order.product?.imageUrl) || PLACEHOLDER_IMAGE;
                         const productName = order.product?.name || 'Product unavailable';
                         const statusLabel = ORDER_STATUS_LABELS[order.status] || order.status;
                         const createdAtLabel = formatDateTime(order.createdAt);
@@ -1995,7 +2012,10 @@ function App() {
                     return (
                       <li key={item.key} className="cart-item">
                         <div className="cart-item-media">
-                          <img src={item.imageUrl || PLACEHOLDER_IMAGE} alt={item.name} />
+                          <img
+                            src={formatProductImageUrl(item.imageUrl) || PLACEHOLDER_IMAGE}
+                            alt={item.name}
+                          />
                         </div>
                         <div className="cart-item-info">
                           <h3>{item.name}</h3>
@@ -2198,7 +2218,7 @@ function App() {
                     const totalSold = Number.isFinite(product.totalSold)
                       ? product.totalSold
                       : Number.parseInt(product.totalSold ?? 0, 10) || 0;
-                    const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+                    const imageSrc = formatProductImageUrl(product.imageUrl) || PLACEHOLDER_IMAGE;
 
                     return (
                       <li key={product.id}>
@@ -2236,7 +2256,7 @@ function App() {
                     Number.isInteger(product.stock) && product.stock >= 0
                       ? product.stock
                       : Number.parseInt(product.stock ?? 0, 10) || 0;
-                  const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+                  const imageSrc = formatProductImageUrl(product.imageUrl) || PLACEHOLDER_IMAGE;
 
                   return (
                     <article
@@ -2287,7 +2307,10 @@ function App() {
             ) : selectedProduct ? (
               <div className="detail-content">
                 <div className="detail-image">
-                  <img src={selectedProduct.imageUrl || PLACEHOLDER_IMAGE} alt={selectedProduct.name} />
+                  <img
+                    src={formatProductImageUrl(selectedProduct.imageUrl) || PLACEHOLDER_IMAGE}
+                    alt={selectedProduct.name}
+                  />
                 </div>
                 <div className="detail-info">
                   <h2>{selectedProduct.name}</h2>
