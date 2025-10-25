@@ -1,9 +1,10 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { all, get, run, initialize, connectionInfo } = require('./db');
 
 const app = express();
@@ -27,16 +28,11 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const extension = path.extname(file.originalname || '').toLowerCase();
-    cb(null, `${uniqueSuffix}${extension}`);
-  },
-});
+const S3_BUCKET = process.env.S3_UPLOAD_BUCKET;
+const S3_REGION = process.env.S3_UPLOAD_REGION || process.env.AWS_REGION || connectionInfo?.region || 'us-east-1';
+const s3Client = new S3Client({ region: S3_REGION });
+
+const storage = multer.memoryStorage();
 
 function imageFileFilter(req, file, cb) {
   if (!file) {
@@ -59,37 +55,90 @@ const upload = multer({
   },
 });
 
-function toPublicImagePath(filename) {
-  if (!filename) {
+function extractS3Key(urlValue) {
+  if (!urlValue || typeof urlValue !== 'string') {
     return null;
   }
-  return `/uploads/${filename}`;
+
+  try {
+    const parsed = new URL(urlValue);
+    const hostPatterns = [
+      `${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com`,
+      `${S3_BUCKET}.s3.amazonaws.com`,
+    ];
+
+    if (hostPatterns.includes(parsed.hostname)) {
+      return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  }
 }
 
-function removeImageFile(imagePath) {
+async function uploadImageToS3(file) {
+  if (!S3_BUCKET) {
+    throw new Error('S3_UPLOAD_BUCKET environment variable is not defined.');
+  }
+
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  const key = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype || 'application/octet-stream',
+    })
+  );
+
+  const url = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${encodeURIComponent(key)}`;
+
+  return { key, url };
+}
+
+async function removeImageFile(imagePath) {
   if (!imagePath || typeof imagePath !== 'string') {
     return;
   }
 
+  // Legacy local files
   const normalised = imagePath.startsWith('/uploads/')
     ? imagePath.slice('/uploads/'.length)
     : imagePath.startsWith('uploads/')
       ? imagePath.slice('uploads/'.length)
       : null;
 
-  if (!normalised) {
+  if (normalised) {
+    const target = path.join(UPLOADS_DIR, normalised);
+
+    fs.promises
+      .unlink(target)
+      .catch((error) => {
+        if (error && error.code !== 'ENOENT') {
+          console.warn('Failed to remove image file:', error.message);
+        }
+      });
     return;
   }
 
-  const target = path.join(UPLOADS_DIR, normalised);
+  const key = extractS3Key(imagePath);
+  if (!key) {
+    return;
+  }
 
-  fs.promises
-    .unlink(target)
-    .catch((error) => {
-      if (error && error.code !== 'ENOENT') {
-        console.warn('Failed to remove image file:', error.message);
-      }
-    });
+  try {
+    await s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+      })
+    );
+  } catch (error) {
+    console.warn('Failed to delete image from S3:', error.message);
+  }
 }
 
 app.use(cors());
@@ -327,8 +376,14 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/products', async (req, res) => {
   try {
     const products = await all(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         ORDER BY created_at DESC`
     );
@@ -345,18 +400,18 @@ app.get('/api/products/top', async (req, res) => {
     const products = await all(
       `SELECT
          p.id,
-         p.seller_id AS sellerId,
+         p.seller_id AS "sellerId",
          p.name,
          p.price,
          p.stock,
-         p.size_options AS sizeOptions,
-         p.image_url AS imageUrl,
+         p.size_options AS "sizeOptions",
+         p.image_url AS "imageUrl",
          p.description,
-         COALESCE(SUM(o.quantity), 0) AS totalSold
+         COALESCE(SUM(o.quantity), 0) AS "totalSold"
        FROM products p
        LEFT JOIN orders o ON o.product_id = p.id
        GROUP BY p.id
-       ORDER BY totalSold DESC, p.created_at DESC
+       ORDER BY "totalSold" DESC, p.created_at DESC
        LIMIT 5`
     );
 
@@ -376,8 +431,14 @@ app.get('/api/products/:id', async (req, res) => {
 
   try {
     const product = await get(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         WHERE id = ?`,
       [id]
@@ -395,6 +456,7 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 app.post('/api/products', upload.single('image'), async (req, res) => {
+  let uploadedImage = null;
   try {
     const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
 
@@ -433,7 +495,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'Product image is required.' });
     }
 
-    const imagePath = toPublicImagePath(req.file.filename);
+    uploadedImage = await uploadImageToS3(req.file);
     const normalisedDescription =
       typeof description === 'string' && description.trim() ? description.trim() : null;
 
@@ -447,14 +509,20 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
         priceValue,
         stockValue,
         serializedSizes,
-        imagePath,
+        uploadedImage.url,
         normalisedDescription,
       ]
     );
 
     const product = await get(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         WHERE id = ?`,
       [result.lastID]
@@ -465,10 +533,9 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       product: mapProductRow(product),
     });
   } catch (error) {
-    if (req.file) {
-      removeImageFile(toPublicImagePath(req.file.filename));
+    if (uploadedImage?.url) {
+      await removeImageFile(uploadedImage.url);
     }
-
     console.error('Product creation error:', error);
     res.status(500).json({ message: 'Failed to create product.' });
   }
@@ -495,8 +562,14 @@ app.get('/api/sellers/:sellerId/products', async (req, res) => {
     }
 
     const rows = await all(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         WHERE seller_id = ?
         ORDER BY created_at DESC`,
@@ -513,6 +586,7 @@ app.get('/api/sellers/:sellerId/products', async (req, res) => {
 app.patch('/api/products/:productId', upload.single('image'), async (req, res) => {
   const productId = Number.parseInt(req.params.productId, 10);
   const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
+  let uploadedImage = null;
 
   if (!Number.isInteger(productId) || productId <= 0) {
     return res.status(400).json({ message: 'Invalid product id supplied.' });
@@ -525,8 +599,14 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
 
   try {
     const existing = await get(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         WHERE id = ?`,
       [productId]
@@ -581,10 +661,10 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
       params.push(serialisedSizes);
     }
 
-    const newImagePath = req.file ? toPublicImagePath(req.file.filename) : null;
     if (req.file) {
+      uploadedImage = await uploadImageToS3(req.file);
       updates.push('image_url = ?');
-      params.push(newImagePath);
+      params.push(uploadedImage.url);
     }
 
     if (description !== undefined) {
@@ -603,15 +683,21 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
     await run(`UPDATE products SET ${updates.join(', ')} WHERE id = ?`, params);
 
     const updated = await get(
-      `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-              image_url AS imageUrl, description
+      `SELECT id,
+              seller_id AS "sellerId",
+              name,
+              price,
+              stock,
+              size_options AS "sizeOptions",
+              image_url AS "imageUrl",
+              description
          FROM products
         WHERE id = ?`,
       [productId]
     );
 
-    if (req.file && existing.imageUrl && existing.imageUrl !== updated.imageUrl) {
-      removeImageFile(existing.imageUrl);
+    if (uploadedImage && existing.imageUrl && existing.imageUrl !== uploadedImage.url) {
+      await removeImageFile(existing.imageUrl);
     }
 
     res.json({
@@ -619,8 +705,8 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
       product: mapProductRow(updated),
     });
   } catch (error) {
-    if (req.file) {
-      removeImageFile(toPublicImagePath(req.file.filename));
+    if (uploadedImage?.url) {
+      await removeImageFile(uploadedImage.url);
     }
 
     console.error('Product update error:', error);
@@ -682,19 +768,26 @@ app.post('/api/orders', async (req, res) => {
 
     for (const item of items) {
     const product = await get(
-      'SELECT id, seller_id AS sellerId, stock FROM products WHERE id = ?',
+      'SELECT id, seller_id AS "sellerId", stock FROM products WHERE id = ?',
       [item.productId]
     );
 
     if (!product) {
-        await run('ROLLBACK');
-        return res.status(404).json({ message: `Product ${item.productId} not found.` });
-      }
+      await run('ROLLBACK');
+      return res.status(404).json({ message: `Product ${item.productId} not found.` });
+    }
 
-      const ownerSellerId =
-        product.sellerId ?? product.seller_id ?? product.sellerid ?? null;
+    const ownerSellerId =
+      product.sellerId ?? product.seller_id ?? product.sellerid ?? null;
 
-      const currentStock = Number.parseInt(product.stock, 10) || 0;
+    if (!ownerSellerId) {
+      await run('ROLLBACK');
+      return res.status(500).json({
+        message: `Product ${item.productId} is not associated with a seller.`,
+      });
+    }
+
+    const currentStock = Number.parseInt(product.stock, 10) || 0;
 
       if (currentStock < item.quantity) {
         await run('ROLLBACK');
@@ -708,8 +801,14 @@ app.post('/api/orders', async (req, res) => {
 
 
       const updatedRow = await get(
-        `SELECT id, seller_id AS sellerId, name, price, stock, size_options AS sizeOptions,
-                image_url AS imageUrl, description
+        `SELECT id,
+                seller_id AS "sellerId",
+                name,
+                price,
+                stock,
+                size_options AS "sizeOptions",
+                image_url AS "imageUrl",
+                description
            FROM products
           WHERE id = ?`,
         [item.productId]
