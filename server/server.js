@@ -164,7 +164,7 @@ function mapProductRow(row) {
 
   const sizeSource = row.sizeOptions ?? row.size_options ?? null;
   const imageSource = row.imageUrl ?? row.image_url ?? null;
-  const sellerSource = row.sellerId ?? row.seller_id ?? null;
+  const sellerSource = row.sellerId ?? row.seller_id ?? row.sellerid ?? null;
   const priceValue =
     typeof row.price === 'number' ? row.price : Number.parseFloat(row.price ?? 0) || 0;
   const stockValue =
@@ -536,8 +536,13 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
       return res.status(404).json({ message: 'Product not found.' });
     }
 
-    if (existing.sellerId !== numericSellerId) {
-      return res.status(403).json({ message: 'You do not have permission to update this product.' });
+    const ownerSellerId =
+      existing.sellerId ?? existing.seller_id ?? existing.sellerid ?? null;
+
+    if (ownerSellerId !== numericSellerId) {
+      return res
+        .status(403)
+        .json({ message: 'You do not have permission to update this product.' });
     }
 
     const updates = [];
