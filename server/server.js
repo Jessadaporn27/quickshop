@@ -681,15 +681,18 @@ app.post('/api/orders', async (req, res) => {
     const createdOrders = [];
 
     for (const item of items) {
-      const product = await get(
-        'SELECT id, seller_id AS sellerId, stock FROM products WHERE id = ?',
-        [item.productId]
-      );
+    const product = await get(
+      'SELECT id, seller_id AS sellerId, stock FROM products WHERE id = ?',
+      [item.productId]
+    );
 
-      if (!product) {
+    if (!product) {
         await run('ROLLBACK');
         return res.status(404).json({ message: `Product ${item.productId} not found.` });
       }
+
+      const ownerSellerId =
+        product.sellerId ?? product.seller_id ?? product.sellerid ?? null;
 
       const currentStock = Number.parseInt(product.stock, 10) || 0;
 
@@ -722,7 +725,7 @@ app.post('/api/orders', async (req, res) => {
          RETURNING id`,
         [
           product.id,
-          product.sellerId || null,
+          ownerSellerId || null,
           customerId,
           item.quantity,
           ORDER_STATUS.PENDING,
