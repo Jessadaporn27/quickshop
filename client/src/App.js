@@ -153,6 +153,7 @@ function App() {
   const [sellerProductSaving, setSellerProductSaving] = useState({});
   const [hasLoadedSellerProducts, setHasLoadedSellerProducts] = useState(false);
   const sellerProductsFetchInFlight = useRef(false);
+  const [productDeleting, setProductDeleting] = useState({});
   const [topSellerProducts, setTopSellerProducts] = useState([]);
   const [isLoadingTopSellers, setIsLoadingTopSellers] = useState(false);
   const [topSellerFeedback, setTopSellerFeedback] = useState(null);
@@ -177,6 +178,7 @@ function App() {
     ? 'Click here to login.'
     : "Don't have ID ? Click here to register";
   const isSeller = user?.role === 'seller';
+  const isAdmin = user?.role === 'admin';
   const isCustomer = user?.role === 'customer';
   const isHomeView = currentView === VIEW.HOME;
   const isCartView = currentView === VIEW.CART;
@@ -459,6 +461,7 @@ function App() {
     setOrdersFeedback(null);
     setSellerProducts([]);
     setIsLoadingSellerProducts(false);
+    setProductDeleting({});
     setSellerProductsFeedback(null);
     setSellerProductEdits({});
     setSellerProductSaving({});
@@ -1377,6 +1380,87 @@ function App() {
     }
   };
 
+  const handleDeleteProduct = useCallback(
+    async (productId, { fromSellerManager = false } = {}) => {
+      if (!user) {
+        return;
+      }
+
+      if (!Number.isInteger(productId) || productId <= 0) {
+        const message = 'Invalid product id.';
+        if (fromSellerManager) {
+          setSellerProductsFeedback({ type: 'error', message });
+        } else {
+          setProductError(message);
+        }
+        return;
+      }
+
+      const confirmed = window.confirm('Are you sure you want to delete this product?');
+      if (!confirmed) {
+        return;
+      }
+
+      if (fromSellerManager) {
+        setSellerProductsFeedback(null);
+      } else {
+        setProductError(null);
+      }
+
+      setProductDeleting((prev) => ({ ...prev, [productId]: true }));
+
+      try {
+        const response = await fetch(resolveApiUrl(`/api/products/${productId}`), {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requesterId: user.id,
+            requesterRole: user.role,
+          }),
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.message || 'Failed to delete product.');
+        }
+
+        setProducts((prev) => prev.filter((item) => item.id !== productId));
+        setTopSellerProducts((prev) => prev.filter((item) => item.id !== productId));
+        setSellerProducts((prev) => prev.filter((item) => item.id !== productId));
+        setSellerProductEdits((prev) => {
+          const next = { ...prev };
+          if (next[productId]) {
+            cleanupDraftPreview(next[productId]);
+            delete next[productId];
+          }
+          return next;
+        });
+        setCartItems((prev) => prev.filter((item) => item.productId !== productId));
+        setSelectedProduct((prev) => (prev && prev.id === productId ? null : prev));
+
+        if (fromSellerManager) {
+          setSellerProductsFeedback({
+            type: 'success',
+            message: 'Product deleted successfully.',
+          });
+        }
+      } catch (error) {
+        if (fromSellerManager) {
+          setSellerProductsFeedback({ type: 'error', message: error.message });
+        } else {
+          setProductError(error.message);
+        }
+      } finally {
+        setProductDeleting((prev) => {
+          const next = { ...prev };
+          delete next[productId];
+          return next;
+        });
+      }
+    },
+    [user, cleanupDraftPreview, setSellerProductsFeedback, setProductError]
+  );
+
   const handleContinueShopping = () => {
     resetCheckoutFlow();
     setCurrentView(VIEW.HOME);
@@ -1689,6 +1773,7 @@ function App() {
                 {sellerProducts.map((product) => {
                   const draft = sellerProductEdits[product.id] || buildProductDraft(product);
                   const isSaving = Boolean(sellerProductSaving[product.id]);
+                  const isDeleting = Boolean(productDeleting[product.id]);
 
                   return (
                     <li key={product.id} className="my-product-card">
@@ -1811,16 +1896,26 @@ function App() {
                           type="button"
                           className="secondary"
                           onClick={() => handleResetSellerProduct(product.id)}
-                          disabled={isSaving}
+                          disabled={isSaving || isDeleting}
                         >
                           Reset
                         </button>
                         <button
                           type="button"
                           onClick={() => handleSaveSellerProduct(product.id)}
-                          disabled={isSaving}
+                          disabled={isSaving || isDeleting}
                         >
                           {isSaving ? 'Saving...' : 'Save changes'}
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() =>
+                            handleDeleteProduct(product.id, { fromSellerManager: true })
+                          }
+                          disabled={isSaving || isDeleting}
+                        >
+                          {isDeleting ? 'Deleting...' : 'Delete'}
                         </button>
                       </div>
                     </li>
@@ -2237,6 +2332,10 @@ function App() {
                       ? product.stock
                       : Number.parseInt(product.stock ?? 0, 10) || 0;
                   const imageSrc = product.imageUrl || PLACEHOLDER_IMAGE;
+                  const canDeleteProductCard =
+                    (isAdmin && Boolean(user?.id)) ||
+                    (isSeller && Boolean(user?.id) && Number(product.sellerId) === user.id);
+                  const isDeleting = Boolean(productDeleting[product.id]);
 
                   return (
                     <article
@@ -2263,6 +2362,21 @@ function App() {
                         </p>
                         {product.description ? (
                           <p className="product-description">{product.description}</p>
+                        ) : null}
+                        {canDeleteProductCard ? (
+                          <div className="product-card-actions">
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleDeleteProduct(product.id);
+                              }}
+                              disabled={isDeleting}
+                            >
+                              {isDeleting ? 'Deleting...' : 'Delete'}
+                            </button>
+                          </div>
                         ) : null}
                       </div>
                     </article>

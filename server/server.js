@@ -10,7 +10,7 @@ const { all, get, run, initialize, connectionInfo } = require('./db');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const TABLE_NAME_REGEX = /^[A-Za-z0-9_]+$/;
-const VALID_ROLES = ['customer', 'seller'];
+const VALID_ROLES = ['customer', 'seller', 'admin'];
 const ORDER_STATUS = {
   PENDING: 'pending',
   PACKING: 'packing',
@@ -711,6 +711,59 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
 
     console.error('Product update error:', error);
     res.status(500).json({ message: 'Failed to update product.' });
+  }
+});
+
+app.delete('/api/products/:productId', async (req, res) => {
+  const productId = Number.parseInt(req.params.productId, 10);
+  const requesterId = Number.parseInt(req.body?.requesterId, 10);
+  const requesterRole = normaliseRole(req.body?.requesterRole);
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return res.status(400).json({ message: 'Invalid product id supplied.' });
+  }
+
+  if (!requesterRole || !VALID_ROLES.includes(requesterRole)) {
+    return res.status(400).json({ message: 'Invalid requester role supplied.' });
+  }
+
+  if (requesterRole !== 'admin' && (!Number.isInteger(requesterId) || requesterId <= 0)) {
+    return res.status(400).json({ message: 'Invalid requester id supplied.' });
+  }
+
+  try {
+    const product = await get(
+      `SELECT id,
+              seller_id AS "sellerId",
+              image_url AS "imageUrl"
+         FROM products
+        WHERE id = ?`,
+      [productId]
+    );
+
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found.' });
+    }
+
+    const ownerSellerId = product.sellerId ?? product.seller_id ?? null;
+    const isAdmin = requesterRole === 'admin';
+    const isOwnerSeller =
+      requesterRole === 'seller' && ownerSellerId && Number(ownerSellerId) === requesterId;
+
+    if (!isAdmin && !isOwnerSeller) {
+      return res.status(403).json({ message: 'You do not have permission to delete this product.' });
+    }
+
+    if (product.imageUrl) {
+      await removeImageFile(product.imageUrl);
+    }
+
+    await run('DELETE FROM products WHERE id = ?', [productId]);
+
+    res.json({ message: 'Product deleted successfully.' });
+  } catch (error) {
+    console.error('Product delete error:', error);
+    res.status(500).json({ message: 'Failed to delete product.' });
   }
 });
 

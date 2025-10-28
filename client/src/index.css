@@ -37,3 +37,25 @@ textarea {
 #root {
   min-height: 100vh;
 }
+
+button.danger {
+  background-color: #d13c3c;
+  color: #ffffff;
+}
+
+button.danger:hover:not(:disabled) {
+  background-color: #b03232;
+}
+
+button.danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.product-card-actions {
+  margin-top: 0.75rem;
+}
+
+.product-card-actions .danger {
+  width: 100%;
+}
