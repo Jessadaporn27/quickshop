@@ -214,6 +214,8 @@ function mapProductRow(row) {
   const sizeSource = row.sizeOptions ?? row.size_options ?? null;
   const imageSource = row.imageUrl ?? row.image_url ?? null;
   const sellerSource = row.sellerId ?? row.seller_id ?? row.sellerid ?? null;
+  const categorySource = row.categoryId ?? row.category_id ?? null;
+  const categoryName = row.categoryName ?? row.category_name ?? null;
   const priceValue =
     typeof row.price === 'number' ? row.price : Number.parseFloat(row.price ?? 0) || 0;
   const stockValue =
@@ -228,6 +230,8 @@ function mapProductRow(row) {
   return {
     id: row.id,
     sellerId: sellerSource,
+    categoryId: categorySource ? Number.parseInt(categorySource, 10) || categorySource : null,
+    categoryName: categoryName ?? null,
     name: row.name,
     price: priceValue,
     stock: stockValue,
@@ -265,6 +269,8 @@ function mapOrderRow(row) {
     product: mapProductRow({
       id: row.product_id ?? row.productId,
       seller_id: row.seller_id ?? row.sellerId,
+      category_id: row.product_category_id ?? row.categoryId ?? row.category_id,
+      category_name: row.product_category_name ?? row.categoryName ?? row.category_name,
       name: row.product_name ?? row.name,
       price: row.product_price ?? row.price,
       stock: row.product_stock ?? row.stock,
@@ -376,16 +382,19 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/products', async (req, res) => {
   try {
     const products = await all(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        ORDER BY created_at DESC`
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        ORDER BY p.created_at DESC`
     );
 
     res.json(products.map(mapProductRow));
@@ -401,6 +410,8 @@ app.get('/api/products/top', async (req, res) => {
       `SELECT
          p.id,
          p.seller_id AS "sellerId",
+         p.category_id AS "categoryId",
+         c.name AS "categoryName",
          p.name,
          p.price,
          p.stock,
@@ -410,7 +421,8 @@ app.get('/api/products/top', async (req, res) => {
          COALESCE(SUM(o.quantity), 0) AS "totalSold"
        FROM products p
        LEFT JOIN orders o ON o.product_id = p.id
-       GROUP BY p.id
+       LEFT JOIN categories c ON c.id = p.category_id
+       GROUP BY p.id, c.name
        ORDER BY "totalSold" DESC, p.created_at DESC
        LIMIT 5`
     );
@@ -419,6 +431,65 @@ app.get('/api/products/top', async (req, res) => {
   } catch (error) {
     console.error('Top products fetch error:', error);
     res.status(500).json({ message: 'Failed to load top products.' });
+  }
+});
+
+app.get('/api/categories', async (req, res) => {
+  try {
+    const categories = await all(
+      `SELECT id, name
+         FROM categories
+        ORDER BY name ASC`
+    );
+
+    res.json(categories);
+  } catch (error) {
+    console.error('Categories fetch error:', error);
+    res.status(500).json({ message: 'Failed to load categories.' });
+  }
+});
+
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name, requesterId, requesterRole } = req.body || {};
+
+    const role = normaliseRole(requesterRole);
+    const numericRequesterId = Number.parseInt(requesterId, 10);
+
+    if (role !== 'admin' || !Number.isInteger(numericRequesterId) || numericRequesterId <= 0) {
+      return res.status(403).json({ message: 'Only admins can manage categories.' });
+    }
+
+    const adminUser = await get('SELECT role FROM users WHERE id = ?', [numericRequesterId]);
+    if (!adminUser || normaliseRole(adminUser.role) !== 'admin') {
+      return res.status(403).json({ message: 'Only admins can manage categories.' });
+    }
+
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    if (!trimmedName) {
+      return res.status(400).json({ message: 'Category name is required.' });
+    }
+
+    const inserted = await run(
+      'INSERT INTO categories (name) VALUES (?) ON CONFLICT (name) DO NOTHING RETURNING id, name',
+      [trimmedName]
+    );
+
+    if (!inserted?.rows?.[0]) {
+      const existing = await get('SELECT id, name FROM categories WHERE name = ?', [trimmedName]);
+      return res.status(200).json({
+        message: 'Category already exists.',
+        category: existing,
+      });
+    }
+
+    res.status(201).json({
+      message: 'Category created successfully.',
+      category: inserted.rows[0],
+    });
+  } catch (error) {
+    console.error('Category create error:', error);
+    res.status(500).json({ message: 'Failed to create category.' });
   }
 });
 
@@ -431,16 +502,19 @@ app.get('/api/products/:id', async (req, res) => {
 
   try {
     const product = await get(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        WHERE id = ?`,
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.id = ?`,
       [id]
     );
 
@@ -458,7 +532,7 @@ app.get('/api/products/:id', async (req, res) => {
 app.post('/api/products', upload.single('image'), async (req, res) => {
   let uploadedImage = null;
   try {
-    const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
+    const { sellerId, name, price, stock, sizeOptions, description, categoryId } = req.body || {};
 
     const numericSellerId = Number.parseInt(sellerId, 10);
     if (!Number.isInteger(numericSellerId) || numericSellerId <= 0) {
@@ -490,6 +564,16 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'Product stock must be zero or a positive integer.' });
     }
 
+    const numericCategoryId = Number.parseInt(categoryId, 10);
+    if (!Number.isInteger(numericCategoryId) || numericCategoryId <= 0) {
+      return res.status(400).json({ message: 'Product category is required.' });
+    }
+
+    const category = await get('SELECT id FROM categories WHERE id = ?', [numericCategoryId]);
+    if (!category) {
+      return res.status(400).json({ message: 'Selected category does not exist.' });
+    }
+
     const serializedSizes = serialiseSizeOptions(sizeOptions);
     if (!req.file) {
       return res.status(400).json({ message: 'Product image is required.' });
@@ -500,11 +584,12 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       typeof description === 'string' && description.trim() ? description.trim() : null;
 
     const result = await run(
-      `INSERT INTO products (seller_id, name, price, stock, size_options, image_url, description)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO products (seller_id, category_id, name, price, stock, size_options, image_url, description)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
       [
         numericSellerId,
+        numericCategoryId,
         trimmedName,
         priceValue,
         stockValue,
@@ -515,16 +600,19 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
     );
 
     const product = await get(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        WHERE id = ?`,
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.id = ?`,
       [result.lastID]
     );
 
@@ -562,17 +650,20 @@ app.get('/api/sellers/:sellerId/products', async (req, res) => {
     }
 
     const rows = await all(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        WHERE seller_id = ?
-        ORDER BY created_at DESC`,
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.seller_id = ?
+        ORDER BY p.created_at DESC`,
       [sellerId]
     );
 
@@ -585,7 +676,7 @@ app.get('/api/sellers/:sellerId/products', async (req, res) => {
 
 app.patch('/api/products/:productId', upload.single('image'), async (req, res) => {
   const productId = Number.parseInt(req.params.productId, 10);
-  const { sellerId, name, price, stock, sizeOptions, description } = req.body || {};
+  const { sellerId, name, price, stock, sizeOptions, description, categoryId } = req.body || {};
   let uploadedImage = null;
 
   if (!Number.isInteger(productId) || productId <= 0) {
@@ -599,16 +690,19 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
 
   try {
     const existing = await get(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        WHERE id = ?`,
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.id = ?`,
       [productId]
     );
 
@@ -661,6 +755,19 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
       params.push(serialisedSizes);
     }
 
+    if (categoryId !== undefined) {
+      const numericCategoryId = Number.parseInt(categoryId, 10);
+      if (!Number.isInteger(numericCategoryId) || numericCategoryId <= 0) {
+        return res.status(400).json({ message: 'Product category is required.' });
+      }
+      const category = await get('SELECT id FROM categories WHERE id = ?', [numericCategoryId]);
+      if (!category) {
+        return res.status(400).json({ message: 'Selected category does not exist.' });
+      }
+      updates.push('category_id = ?');
+      params.push(numericCategoryId);
+    }
+
     if (req.file) {
       uploadedImage = await uploadImageToS3(req.file);
       updates.push('image_url = ?');
@@ -683,16 +790,19 @@ app.patch('/api/products/:productId', upload.single('image'), async (req, res) =
     await run(`UPDATE products SET ${updates.join(', ')} WHERE id = ?`, params);
 
     const updated = await get(
-      `SELECT id,
-              seller_id AS "sellerId",
-              name,
-              price,
-              stock,
-              size_options AS "sizeOptions",
-              image_url AS "imageUrl",
-              description
-         FROM products
-        WHERE id = ?`,
+      `SELECT p.id,
+              p.seller_id AS "sellerId",
+              p.category_id AS "categoryId",
+              c.name AS "categoryName",
+              p.name,
+              p.price,
+              p.stock,
+              p.size_options AS "sizeOptions",
+              p.image_url AS "imageUrl",
+              p.description
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.id = ?`,
       [productId]
     );
 
@@ -854,16 +964,19 @@ app.post('/api/orders', async (req, res) => {
 
 
       const updatedRow = await get(
-        `SELECT id,
-                seller_id AS "sellerId",
-                name,
-                price,
-                stock,
-                size_options AS "sizeOptions",
-                image_url AS "imageUrl",
-                description
-           FROM products
-          WHERE id = ?`,
+        `SELECT p.id,
+                p.seller_id AS "sellerId",
+                p.category_id AS "categoryId",
+                c.name AS "categoryName",
+                p.name,
+                p.price,
+                p.stock,
+                p.size_options AS "sizeOptions",
+                p.image_url AS "imageUrl",
+                p.description
+           FROM products p
+           LEFT JOIN categories c ON c.id = p.category_id
+          WHERE p.id = ?`,
         [item.productId]
       );
 
@@ -889,12 +1002,12 @@ app.post('/api/orders', async (req, res) => {
       );
 
       const orderRow = await get(
-        `SELECT
-           o.id,
-           o.product_id,
-           o.seller_id,
-           o.customer_id,
-           o.quantity,
+       `SELECT
+         o.id,
+         o.product_id,
+         o.seller_id,
+         o.customer_id,
+         o.quantity,
            o.status,
            o.buyer_name,
            o.buyer_phone,
@@ -907,9 +1020,12 @@ app.post('/api/orders', async (req, res) => {
            p.image_url AS product_image_url,
            p.description AS product_description,
            p.size_options AS product_size_options,
-           p.stock AS product_stock
+           p.stock AS product_stock,
+           p.category_id AS product_category_id,
+           c.name AS product_category_name
          FROM orders o
          JOIN products p ON p.id = o.product_id
+         LEFT JOIN categories c ON c.id = p.category_id
         WHERE o.id = ?`,
         [orderInsert.lastID]
       );
@@ -976,9 +1092,12 @@ app.get('/api/sellers/:sellerId/orders', async (req, res) => {
          p.image_url AS product_image_url,
          p.description AS product_description,
          p.size_options AS product_size_options,
-         p.stock AS product_stock
+         p.stock AS product_stock,
+         p.category_id AS product_category_id,
+         c.name AS product_category_name
        FROM orders o
        JOIN products p ON p.id = o.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
       WHERE o.seller_id = ?
       ORDER BY o.created_at DESC`,
       [sellerId]
@@ -1024,9 +1143,12 @@ app.get('/api/users/:userId/orders', async (req, res) => {
          p.image_url AS product_image_url,
          p.description AS product_description,
          p.size_options AS product_size_options,
-         p.stock AS product_stock
+         p.stock AS product_stock,
+         p.category_id AS product_category_id,
+         c.name AS product_category_name
        FROM orders o
        JOIN products p ON p.id = o.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
       WHERE o.customer_id = ?
       ORDER BY o.created_at DESC`,
       [userId]
@@ -1071,9 +1193,12 @@ app.post('/api/orders/:orderId/receive', async (req, res) => {
          p.image_url AS product_image_url,
          p.description AS product_description,
          p.size_options AS product_size_options,
-         p.stock AS product_stock
+         p.stock AS product_stock,
+         p.category_id AS product_category_id,
+         c.name AS product_category_name
        FROM orders o
        JOIN products p ON p.id = o.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
       WHERE o.id = ?`,
       [orderId]
     );
@@ -1115,9 +1240,12 @@ app.post('/api/orders/:orderId/receive', async (req, res) => {
          p.image_url AS product_image_url,
          p.description AS product_description,
          p.size_options AS product_size_options,
-         p.stock AS product_stock
+         p.stock AS product_stock,
+         p.category_id AS product_category_id,
+         c.name AS product_category_name
        FROM orders o
        JOIN products p ON p.id = o.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
       WHERE o.id = ?`,
       [orderId]
     );

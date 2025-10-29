@@ -221,11 +221,22 @@ async function createUsersTable() {
   );
 }
 
+async function createCategoriesTable() {
+  await run(
+    `CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+}
+
 async function createProductsTable() {
   await run(
     `CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
       seller_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
       price NUMERIC(10, 2) NOT NULL DEFAULT 0,
       stock INTEGER NOT NULL DEFAULT 0,
@@ -235,6 +246,40 @@ async function createProductsTable() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`
   );
+}
+
+async function ensureProductsCategoryColumn() {
+  const columnExists = await get(
+    `SELECT 1
+       FROM information_schema.columns
+      WHERE table_name = 'products'
+        AND column_name = 'category_id'`
+  );
+
+  if (!columnExists) {
+    await run('ALTER TABLE products ADD COLUMN category_id INTEGER');
+  }
+
+  await run(
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (
+         SELECT 1
+           FROM pg_constraint
+          WHERE conname = 'products_category_id_fkey'
+            AND conrelid = 'products'::regclass
+       ) THEN
+         ALTER TABLE products
+           ADD CONSTRAINT products_category_id_fkey
+           FOREIGN KEY (category_id)
+           REFERENCES categories(id)
+           ON DELETE SET NULL;
+       END IF;
+     END;
+     $$;`
+  );
+
+  await run('CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id)');
 }
 
 async function createOrdersTable() {
@@ -281,6 +326,19 @@ async function ensureOrdersUpdatedAtTrigger() {
      END;
      $$;`
   );
+}
+
+async function seedCategoriesIfEmpty() {
+  const countRow = await get('SELECT COUNT(*)::INTEGER AS total FROM categories');
+  if (countRow?.total && countRow.total > 0) {
+    return;
+  }
+
+  const defaults = ['General', 'Food & Beverage', 'Fashion', 'Electronics', 'Home Goods'];
+
+  for (const name of defaults) {
+    await run('INSERT INTO categories (name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
+  }
 }
 
 async function seedProductsIfEmpty() {
@@ -347,9 +405,12 @@ async function seedProductsIfEmpty() {
     },
   ];
 
+  const generalCategory = await get('SELECT id FROM categories WHERE name = $1', ['General']);
+  const defaultCategoryId = generalCategory?.id ?? null;
+
   const insertSql = `
-    INSERT INTO products (seller_id, name, price, stock, size_options, image_url, description)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO products (seller_id, category_id, name, price, stock, size_options, image_url, description)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
   `;
 
   for (const product of seedData) {
@@ -360,6 +421,7 @@ async function seedProductsIfEmpty() {
 
     await run(insertSql, [
       null,
+      defaultCategoryId,
       product.name,
       product.price,
       Number.isInteger(product.stock) && product.stock >= 0 ? product.stock : 0,
@@ -373,9 +435,12 @@ async function seedProductsIfEmpty() {
 async function initialize() {
   await ensureDatabaseExists();
   await createUsersTable();
+  await createCategoriesTable();
   await createProductsTable();
+  await ensureProductsCategoryColumn();
   await createOrdersTable();
   await ensureOrdersUpdatedAtTrigger();
+  await seedCategoriesIfEmpty();
   await seedProductsIfEmpty();
 }
 

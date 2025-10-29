@@ -1967,4 +1967,86 @@ body {
   box-shadow: 0 16px 28px rgba(79, 113, 255, 0.4);
 }
 
+.search-bar select {
+  border: none;
+  background: transparent;
+  color: var(--neutral-50);
+  outline: none;
+  min-width: 140px;
+  font-size: 0.9rem;
+}
+
+.search-bar select option {
+  color: var(--neutral-900);
+}
+
+.product-category,
+.detail-category {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.9);
+  margin-top: 0.35rem;
+}
+
+.categories-panel {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.categories-panel h2 {
+  margin-bottom: 1rem;
+}
+
+.category-form {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.category-form input {
+  flex: 1 1 240px;
+  padding: 0.55rem 0.85rem;
+  border-radius: 999px;
+  border: none;
+}
+
+.category-form button {
+  padding: 0.55rem 1.25rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--primary-500);
+  color: #fff;
+  cursor: pointer;
+}
+
+.category-form button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.category-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.category-list li {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.65rem 0.9rem;
+}
+
+.seller-category-hint {
+  background: rgba(255, 255, 255, 0.12);
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
 

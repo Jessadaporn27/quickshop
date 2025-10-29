@@ -38,6 +38,7 @@ const VIEW = {
   CHECKOUT: 'checkout',
   MY_PRODUCTS: 'myProducts',
   ORDERS: 'orders',
+  CATEGORIES: 'categories',
 };
 
 const buildCartKey = (productId, size) => `${productId}::${size || 'ALL'}`;
@@ -69,6 +70,10 @@ function buildProductDraft(product = {}) {
     imageFile: null,
     imagePreview: product.imageUrl ?? '',
     description: product.description ?? '',
+    categoryId:
+      product.categoryId !== undefined && product.categoryId !== null
+        ? String(product.categoryId)
+        : '',
   };
 }
 
@@ -80,6 +85,7 @@ const EMPTY_PRODUCT_FORM = {
   description: '',
   imageFile: null,
   imagePreview: '',
+  categoryId: '',
 };
 
 const ORDER_STATUS = {
@@ -154,6 +160,14 @@ function App() {
   const [hasLoadedSellerProducts, setHasLoadedSellerProducts] = useState(false);
   const sellerProductsFetchInFlight = useRef(false);
   const [productDeleting, setProductDeleting] = useState({});
+  const [categories, setCategories] = useState([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
+  const [hasLoadedCategories, setHasLoadedCategories] = useState(false);
+  const categoriesFetchInFlight = useRef(false);
+  const [categoryFeedback, setCategoryFeedback] = useState(null);
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('all');
   const [topSellerProducts, setTopSellerProducts] = useState([]);
   const [isLoadingTopSellers, setIsLoadingTopSellers] = useState(false);
   const [topSellerFeedback, setTopSellerFeedback] = useState(null);
@@ -185,6 +199,7 @@ function App() {
   const isCheckoutView = currentView === VIEW.CHECKOUT;
   const isOrdersView = currentView === VIEW.ORDERS;
   const isMyProductsView = currentView === VIEW.MY_PRODUCTS;
+  const isCategoriesView = currentView === VIEW.CATEGORIES;
   const hasCartItems = cartItems.length > 0;
   const resetCheckoutFlow = () => {
     setCheckoutPayload(null);
@@ -192,6 +207,47 @@ function App() {
     setCheckoutForm({ ...DEFAULT_CHECKOUT_FORM });
     setIsPlacingOrder(false);
   };
+
+  const fetchCategories = useCallback(
+    (force = false) => {
+      if (!force && hasLoadedCategories) {
+        return;
+      }
+
+      if (categoriesFetchInFlight.current) {
+        return;
+      }
+
+      categoriesFetchInFlight.current = true;
+      setIsLoadingCategories(true);
+
+      fetch(resolveApiUrl('/api/categories'))
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.message || 'Failed to load categories.');
+          }
+          return response.json();
+        })
+        .then((items) => {
+          setCategories(Array.isArray(items) ? items : []);
+          setHasLoadedCategories(true);
+          setCategoryFeedback((prev) => (prev?.type === 'error' ? null : prev));
+        })
+        .catch((error) => {
+          setCategoryFeedback({ type: 'error', message: error.message });
+        })
+        .finally(() => {
+          setIsLoadingCategories(false);
+          categoriesFetchInFlight.current = false;
+        });
+    },
+    [hasLoadedCategories]
+  );
+
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
 
   const fetchOrders = useCallback(
     (force = false) => {
@@ -463,6 +519,14 @@ function App() {
     setIsLoadingSellerProducts(false);
     setProductDeleting({});
     setSellerProductsFeedback(null);
+    setCategories([]);
+    setIsLoadingCategories(false);
+    setCategoryFeedback(null);
+    setHasLoadedCategories(false);
+    categoriesFetchInFlight.current = false;
+    setNewCategoryName('');
+    setIsCreatingCategory(false);
+    setSelectedCategoryFilter('all');
     setSellerProductEdits({});
     setSellerProductSaving({});
     setHasLoadedSellerProducts(false);
@@ -590,15 +654,28 @@ function App() {
   }, [currentView, fetchSellerProducts, isSeller, user?.id]);
 
   const filteredProducts = useMemo(() => {
-    if (!searchText) {
-      return products;
+    const list = Array.isArray(products) ? products : [];
+
+    let filtered = list;
+
+    if (selectedCategoryFilter && selectedCategoryFilter !== 'all') {
+      filtered = filtered.filter((product) => {
+        const productCategory = product.categoryId ?? product.category_id ?? null;
+        return String(productCategory ?? '') === selectedCategoryFilter;
+      });
     }
+
+    if (!searchText) {
+      return filtered;
+    }
+
     const keyword = searchText.trim().toLowerCase();
-    return products.filter((product) =>
-      product.name?.toLowerCase().includes(keyword) ||
-      product.description?.toLowerCase().includes(keyword)
+    return filtered.filter(
+      (product) =>
+        product.name?.toLowerCase().includes(keyword) ||
+        product.description?.toLowerCase().includes(keyword)
     );
-  }, [products, searchText]);
+  }, [products, searchText, selectedCategoryFilter]);
 
   const detailMetadata = useMemo(() => {
     if (!selectedProduct) {
@@ -717,6 +794,14 @@ function App() {
     closeProductDetail();
     setSellerProductsFeedback(null);
   };
+  const handleNavCategories = () => {
+    resetCheckoutFlow();
+    setIsAddProductVisible(false);
+    setCurrentView(VIEW.CATEGORIES);
+    closeProductDetail();
+    setCategoryFeedback(null);
+    fetchCategories(true);
+  };
   const handleNavOrders = () => {
     resetCheckoutFlow();
     setIsAddProductVisible(false);
@@ -732,6 +817,7 @@ function App() {
       const next = !prev;
       if (next) {
         setCurrentView(VIEW.HOME);
+        fetchCategories();
       } else {
         setCurrentView(VIEW.MY_PRODUCTS);
         setSellerProductsFeedback(null);
@@ -802,6 +888,12 @@ function App() {
       return;
     }
 
+    const categoryValue = newProductValues.categoryId;
+    if (!categoryValue) {
+      setProductFormFeedback({ type: 'error', message: 'Please select a product category.' });
+      return;
+    }
+
     const sizeList = newProductValues.sizeOptions
       .split(',')
       .map((item) => item.trim())
@@ -823,6 +915,7 @@ function App() {
       formData.append('name', nameValue);
       formData.append('price', priceValue);
       formData.append('stock', stockValue);
+      formData.append('categoryId', categoryValue);
       if (uniqueSizes.length > 0) {
         formData.append('sizeOptions', uniqueSizes.join(','));
       }
@@ -871,6 +964,53 @@ function App() {
       setProductFormFeedback({ type: 'error', message: error.message });
     } finally {
       setIsCreatingProduct(false);
+    }
+  };
+
+  const handleAddCategory = async (event) => {
+    event.preventDefault();
+
+    if (!isAdmin || !user?.id) {
+      setCategoryFeedback({ type: 'error', message: 'Only admins can add categories.' });
+      return;
+    }
+
+    const trimmedName = newCategoryName.trim();
+    if (!trimmedName) {
+      setCategoryFeedback({ type: 'error', message: 'Category name is required.' });
+      return;
+    }
+
+    setIsCreatingCategory(true);
+    setCategoryFeedback(null);
+
+    try {
+      const response = await fetch(resolveApiUrl('/api/categories'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: trimmedName,
+          requesterId: user.id,
+          requesterRole: user.role,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.message || 'Failed to create category.');
+      }
+
+      setCategoryFeedback({
+        type: 'success',
+        message: payload?.message || 'Category created successfully.',
+      });
+      setNewCategoryName('');
+      fetchCategories(true);
+    } catch (error) {
+      setCategoryFeedback({ type: 'error', message: error.message });
+    } finally {
+      setIsCreatingCategory(false);
     }
   };
 
@@ -1304,6 +1444,12 @@ function App() {
       return;
     }
 
+    const categoryValue = draft.categoryId;
+    if (!categoryValue) {
+      setSellerProductsFeedback({ type: 'error', message: 'Please select a category.' });
+      return;
+    }
+
     const sizeList = (draft.sizeOptions || '')
       .split(',')
       .map((item) => item.trim())
@@ -1320,6 +1466,7 @@ function App() {
       formData.append('name', trimmedName);
       formData.append('price', parsedPrice);
       formData.append('stock', parsedStock);
+      formData.append('categoryId', categoryValue);
       formData.append('sizeOptions', uniqueSizes.join(','));
       formData.append('description', descriptionValue);
       if (draft.imageFile) {
@@ -1557,6 +1704,18 @@ function App() {
             <span></span>
           </button>
           <form className="search-bar" onSubmit={(event) => event.preventDefault()}>
+            <select
+              value={selectedCategoryFilter}
+              onChange={(event) => setSelectedCategoryFilter(event.target.value)}
+              disabled={isLoadingCategories}
+            >
+              <option value="all">All categories</option>
+              {categories.map((category) => (
+                <option key={category.id} value={String(category.id)}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
             <input
               type="search"
               placeholder="Hinted search text"
@@ -1618,6 +1777,14 @@ function App() {
             >
               Orders
             </button>
+          ) : isAdmin ? (
+            <button
+              type="button"
+              onClick={handleNavCategories}
+              className={isCategoriesView ? 'active' : ''}
+            >
+              Categories
+            </button>
           ) : null}
           <a href="#about">About</a>
           <button type="button" onClick={handleLogout}>
@@ -1627,9 +1794,48 @@ function App() {
       </header>
 
       <main className="product-layout">
+        {isAdmin && isCategoriesView ? (
+          <section className="categories-panel">
+            <h2>Manage categories</h2>
+            <form className="category-form" onSubmit={handleAddCategory}>
+              <input
+                type="text"
+                placeholder="Category name"
+                value={newCategoryName}
+                onChange={(event) => setNewCategoryName(event.target.value)}
+                disabled={isCreatingCategory}
+              />
+              <button type="submit" disabled={isCreatingCategory}>
+                {isCreatingCategory ? 'Adding...' : 'Add category'}
+              </button>
+            </form>
+            {categoryFeedback ? (
+              <p className={`orders-feedback ${categoryFeedback.type}`}>
+                {categoryFeedback.message}
+              </p>
+            ) : null}
+            {isLoadingCategories ? (
+              <p className="orders-status">Loading categories...</p>
+            ) : categories.length === 0 ? (
+              <p className="orders-status">No categories available. Add a new one to begin.</p>
+            ) : (
+              <ul className="category-list">
+                {categories.map((category) => (
+                  <li key={category.id}>{category.name}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ) : null}
         {isSeller && isAddProductVisible ? (
           <section className="seller-panel">
             <h2>Add a product</h2>
+            {categories.length === 0 ? (
+              <p className="seller-category-hint">
+                No categories available. Please ask an admin to add categories before creating a
+                product.
+              </p>
+            ) : null}
             <form className="seller-form" onSubmit={handleCreateProduct}>
               <div className="seller-form-row">
                 <label>
@@ -1671,6 +1877,23 @@ function App() {
                     disabled={isCreatingProduct}
                     required
                   />
+                </label>
+                <label>
+                  <span>Category</span>
+                  <select
+                    name="categoryId"
+                    value={newProductValues.categoryId}
+                    onChange={handleNewProductChange}
+                    disabled={isCreatingProduct || isLoadingCategories || categories.length === 0}
+                    required
+                  >
+                    <option value="">Select category</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={String(category.id)}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
               <div className="seller-form-row">
@@ -1818,6 +2041,23 @@ function App() {
                             }
                             disabled={isSaving}
                           />
+                        </label>
+                        <label>
+                          <span>Category</span>
+                          <select
+                            value={draft.categoryId}
+                            onChange={(event) =>
+                              handleSellerProductChange(product.id, 'categoryId', event.target.value)
+                            }
+                            disabled={isSaving || isLoadingCategories || categories.length === 0}
+                          >
+                            <option value="">Select category</option>
+                            {categories.map((category) => (
+                              <option key={category.id} value={String(category.id)}>
+                                {category.name}
+                              </option>
+                            ))}
+                          </select>
                         </label>
                         <label className="my-product-full">
                           <span>Sizes (comma separated)</span>
@@ -2357,6 +2597,9 @@ function App() {
                       <div className="product-info">
                         <h3>{product.name}</h3>
                         <p className="product-price">{formatCurrency(product.price)}</p>
+                        {product.categoryName ? (
+                          <p className="product-category">Category: {product.categoryName}</p>
+                        ) : null}
                         <p className={`product-stock ${stockCount > 0 ? '' : 'out'}`}>
                           {stockCount > 0 ? `In stock: ${stockCount}` : 'Out of stock'}
                         </p>
@@ -2406,6 +2649,9 @@ function App() {
                 <div className="detail-info">
                   <h2>{selectedProduct.name}</h2>
                   <p className="detail-price">{formatCurrency(selectedProduct.price)}</p>
+                  {selectedProduct.categoryName ? (
+                    <p className="detail-category">Category: {selectedProduct.categoryName}</p>
+                  ) : null}
 
                   <p className={`detail-stock ${detailMetadata.canPurchase ? '' : 'out'}`}>
                     {detailMetadata.canPurchase
